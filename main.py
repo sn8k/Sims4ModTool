@@ -8,7 +8,7 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.3"
+APP_VERSION = "v3.4"
 APP_VERSION_DATE = "20/10/2025"
 
 
@@ -248,7 +248,12 @@ class ModManagerApp(QtWidgets.QWidget):
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
 
-        layout.addWidget(self.table)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
+        header.setStretchLastSection(True)
+        self.table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+
+        layout.addWidget(self.table, stretch=1)
 
         # Boutons
         self.refresh_button = QtWidgets.QPushButton("Analyser / Rafraîchir", self)
