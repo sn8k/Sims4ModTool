@@ -1,11 +1,38 @@
 import sys
 import os
 import json
-from PyQt5 import QtWidgets, QtCore
+from functools import partial
+from urllib.parse import quote_plus
+from PyQt5 import QtWidgets, QtCore, QtGui
 from datetime import datetime
 from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
+IGNORE_LIST_PATH = "ignorelist.txt"
+APP_VERSION = "v3.7"
+APP_VERSION_DATE = "20/10/2025"
+
+
+def format_datetime(value):
+    if not value:
+        return ""
+    return value.strftime("%d/%m/%Y %H:%M")
+
+
+def load_ignore_list(path=IGNORE_LIST_PATH):
+    if not os.path.exists(path):
+        return []
+    with open(path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip()]
+
+
+def save_ignore_list(ignored_mods, path=IGNORE_LIST_PATH):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for mod_name in sorted(set(ignored_mods)):
+            f.write(f"{mod_name}\n")
 
 def get_file_date(file_path):
     timestamp = os.path.getmtime(file_path)
@@ -14,9 +41,9 @@ def get_file_date(file_path):
 def load_settings(path=SETTINGS_PATH):
     try:
         with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+            settings = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        return {
+        settings = {
             "hide_post_118": True,
             "filter_116_to_118": True,
             "filter_package_and_ts4script": False,
@@ -25,6 +52,12 @@ def load_settings(path=SETTINGS_PATH):
             "ignored_mods": [],  # Liste des mods ignorés
             "show_ignored": False  # Contrôle si les mods ignorés doivent être affichés
         }
+    ignored_from_file = load_ignore_list()
+    if not ignored_from_file and settings.get("ignored_mods"):
+        ignored_from_file = settings.get("ignored_mods", [])
+        save_ignore_list(ignored_from_file)
+    settings["ignored_mods"] = ignored_from_file
+    return settings
 
 def save_settings(settings, path=SETTINGS_PATH):
     with open(path, "w", encoding="utf-8") as f:
@@ -50,6 +83,7 @@ def generate_data_rows(directory, settings):
 
     data_rows = []
     ignored_mods = set(settings.get("ignored_mods", []))
+    show_ignored = settings.get("show_ignored", False)
 
     # .package files
     for pkg, pkg_path in package_files.items():
@@ -66,13 +100,24 @@ def generate_data_rows(directory, settings):
             continue
         if settings["filter_package_and_ts4script"] and not script_path:
             continue
-        ignored = pkg in ignored_mods
+
+        candidates = [name for name in (pkg, script_file if script_path else None) if name]
+        ignored = any(name in ignored_mods for name in candidates)
+        if ignored and not show_ignored:
+            continue
 
         status = "MP"
         if script_path:
             status = "X"
-
-        data_rows.append([status, pkg, pkg_date, script_file if script_path else "", script_date, ignored])
+        data_rows.append({
+            "status": status,
+            "package": pkg,
+            "package_date": format_datetime(pkg_date),
+            "script": script_file if script_path else "",
+            "script_date": format_datetime(script_date),
+            "ignored": ignored,
+            "ignore_candidates": candidates or [pkg]
+        })
 
     # ts4script orphans
     for script, script_path in ts4script_files.items():
@@ -89,10 +134,21 @@ def generate_data_rows(directory, settings):
             continue
         if settings["filter_package_and_ts4script"]:
             continue
-        ignored = script in ignored_mods
+        candidates = [script]
+        ignored = any(name in ignored_mods for name in candidates)
+        if ignored and not show_ignored:
+            continue
         status = "MS"
 
-        data_rows.append([status, "", "", script, script_date, ignored])
+        data_rows.append({
+            "status": status,
+            "package": "",
+            "package_date": "",
+            "script": script,
+            "script_date": format_datetime(script_date),
+            "ignored": ignored,
+            "ignore_candidates": candidates
+        })
 
     return data_rows
 
@@ -115,10 +171,12 @@ class ModManagerApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
 
-        self.setWindowTitle("Gestionnaire de Mods Sims 4 – v3.2")
+        self.setWindowTitle(f"Gestionnaire de Mods Sims 4 – {APP_VERSION} ({APP_VERSION_DATE})")
         self.setGeometry(100, 100, 800, 600)
 
         self.settings = load_settings()
+        self.ignored_mods = set(self.settings.get("ignored_mods", []))
+        self.last_scanned_directory = ""
 
         self.init_ui()
 
@@ -191,7 +249,19 @@ class ModManagerApp(QtWidgets.QWidget):
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
 
-        layout.addWidget(self.table)
+        header = self.table.horizontalHeader()
+        for column in range(self.table.columnCount()):
+            resize_mode = QtWidgets.QHeaderView.Stretch
+            if column in (0, 2, 4, self.table.columnCount() - 1):
+                resize_mode = QtWidgets.QHeaderView.ResizeToContents
+            header.setSectionResizeMode(column, resize_mode)
+        header.setStretchLastSection(False)
+        self.table.setSortingEnabled(True)
+        self.table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_context_menu)
+
+        layout.addWidget(self.table, stretch=1)
 
         # Boutons
         self.refresh_button = QtWidgets.QPushButton("Analyser / Rafraîchir", self)
@@ -219,10 +289,12 @@ class ModManagerApp(QtWidgets.QWidget):
     def toggle_setting(self, key):
         self.settings[key] = getattr(self, f"{key}_checkbox").isChecked()
         save_settings(self.settings)
+        self.refresh_table_only()
 
     def toggle_show_ignored(self):
         self.settings["show_ignored"] = self.show_ignored_checkbox.isChecked()
         save_settings(self.settings)
+        self.refresh_table_only()
 
     def refresh_tree(self):
         folder = self.mod_directory_input.text()
@@ -231,30 +303,123 @@ class ModManagerApp(QtWidgets.QWidget):
             return
         self.settings["mod_directory"] = folder
         save_settings(self.settings)
+        self.ignored_mods = set(self.settings.get("ignored_mods", []))
+        self.last_scanned_directory = folder
         rows = generate_data_rows(folder, self.settings)
         self.populate_table(rows)
 
+    def refresh_table_only(self):
+        if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
+            self.ignored_mods = set(self.settings.get("ignored_mods", []))
+            rows = generate_data_rows(self.last_scanned_directory, self.settings)
+            self.populate_table(rows)
+
     def populate_table(self, data_rows):
+        header = self.table.horizontalHeader()
+        sorting_enabled = self.table.isSortingEnabled()
+        sort_section = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(0)  # Clear previous data
         for row in data_rows:
-            self.table.insertRow(self.table.rowCount())
-            for col in range(len(row) - 1):  # Exclure la colonne "Ignoré"
-                self.table.setItem(self.table.rowCount() - 1, col, QtWidgets.QTableWidgetItem(str(row[col])))
+            row_position = self.table.rowCount()
+            self.table.insertRow(row_position)
+            columns = [
+                row.get("status", ""),
+                row.get("package", ""),
+                row.get("package_date", ""),
+                row.get("script", ""),
+                row.get("script_date", "")
+            ]
+            for col_idx, value in enumerate(columns):
+                item = QtWidgets.QTableWidgetItem(str(value))
+                if col_idx == 0:
+                    item.setData(QtCore.Qt.UserRole, row.get("ignore_candidates", []))
+                self.table.setItem(row_position, col_idx, item)
 
             # Ajouter la case à cocher dans la colonne "Ignoré"
+            ignored = row.get("ignored", False)
+            ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
+            ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
+            ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+            self.table.setItem(row_position, 5, ignore_item)
             ignore_checkbox = QtWidgets.QCheckBox()
-            ignore_checkbox.setChecked(row[5])  # Marquer comme "ignorer" si la valeur est True
-            ignore_checkbox.stateChanged.connect(lambda state, row_id=row[0]: self.update_ignore_mod(state, row_id))
-            self.table.setCellWidget(self.table.rowCount() - 1, 5, ignore_checkbox)
+            ignore_checkbox.stateChanged.connect(partial(self.update_ignore_mod, row.get("ignore_candidates", [])))
+            ignore_checkbox.blockSignals(True)
+            ignore_checkbox.setChecked(ignored)
+            ignore_checkbox.blockSignals(False)
+            self.table.setCellWidget(row_position, 5, ignore_checkbox)
+        self.table.setSortingEnabled(sorting_enabled)
+        if sorting_enabled:
+            self.table.sortByColumn(sort_section, sort_order)
 
-    def update_ignore_mod(self, state, row_id):
-        ignored_mods = self.settings.get("ignored_mods", [])
+    def show_context_menu(self, position):
+        index = self.table.indexAt(position)
+        if not index.isValid():
+            return
+
+        row = index.row()
+        status_item = self.table.item(row, 0)
+        candidates = []
+        if status_item is not None:
+            stored_candidates = status_item.data(QtCore.Qt.UserRole)
+            if stored_candidates:
+                candidates = list(stored_candidates)
+
+        menu = QtWidgets.QMenu(self)
+        ignore_action = menu.addAction("Ignorer")
+        google_action = menu.addAction("Recherche Google")
+
+        selected_action = menu.exec_(self.table.viewport().mapToGlobal(position))
+
+        if selected_action == ignore_action:
+            checkbox = self.table.cellWidget(row, 5)
+            if checkbox is not None:
+                checkbox.setChecked(not checkbox.isChecked())
+        elif selected_action == google_action:
+            self.launch_google_search(row, candidates)
+
+    def launch_google_search(self, row, candidates):
+        file_name = ""
+        for column in (1, 3):
+            item = self.table.item(row, column)
+            if item:
+                text = item.text().strip()
+                if text:
+                    file_name = text
+                    break
+
+        if not file_name and candidates:
+            file_name = candidates[0]
+
+        if not file_name:
+            return
+
+        base_name, _ = os.path.splitext(file_name)
+        if not base_name:
+            return
+
+        search_url = QtCore.QUrl(f"https://www.google.com/search?q={quote_plus(base_name)}")
+        QtGui.QDesktopServices.openUrl(search_url)
+
+    def update_ignore_mod(self, candidates, state):
+        candidates = [name for name in candidates if name]
+        if not candidates:
+            return
+
+        canonical_key = candidates[0]
         if state == QtCore.Qt.Checked:
-            ignored_mods.append(row_id)
+            for name in candidates[1:]:
+                self.ignored_mods.discard(name)
+            self.ignored_mods.add(canonical_key)
         else:
-            ignored_mods.remove(row_id)
-        self.settings["ignored_mods"] = ignored_mods
+            for name in candidates:
+                self.ignored_mods.discard(name)
+
+        save_ignore_list(self.ignored_mods)
+        self.settings["ignored_mods"] = sorted(self.ignored_mods)
         save_settings(self.settings)
+        self.refresh_table_only()
 
     def export_current(self):
         rows = []
