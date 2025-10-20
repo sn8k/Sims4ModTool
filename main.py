@@ -1,6 +1,7 @@
 import sys
 import os
 import json
+import shutil
 from functools import partial
 from urllib.parse import quote_plus
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -9,7 +10,7 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.8"
+APP_VERSION = "v3.9"
 APP_VERSION_DATE = "20/10/2025"
 
 
@@ -48,10 +49,25 @@ def load_settings(path=SETTINGS_PATH):
             "filter_116_to_118": True,
             "filter_package_and_ts4script": False,
             "mod_directory": "",
+            "sims_cache_directory": "",
+            "backups_directory": "",
             "xls_file_path": "",
             "ignored_mods": [],  # Liste des mods ignorés
             "show_ignored": False  # Contrôle si les mods ignorés doivent être affichés
         }
+    defaults = {
+        "hide_post_118": True,
+        "filter_116_to_118": True,
+        "filter_package_and_ts4script": False,
+        "mod_directory": "",
+        "sims_cache_directory": "",
+        "backups_directory": "",
+        "xls_file_path": "",
+        "ignored_mods": [],
+        "show_ignored": False,
+    }
+    for key, value in defaults.items():
+        settings.setdefault(key, value)
     ignored_from_file = load_ignore_list()
     if not ignored_from_file and settings.get("ignored_mods"):
         ignored_from_file = settings.get("ignored_mods", [])
@@ -169,6 +185,73 @@ def export_to_excel(save_path, data_rows):
 
     wb.save(save_path)
 
+
+class ConfigurationDialog(QtWidgets.QDialog):
+    def __init__(self, parent, settings):
+        super().__init__(parent)
+        self.setWindowTitle("Configuration")
+        self.setModal(True)
+        self._parent = parent
+
+        layout = QtWidgets.QVBoxLayout()
+
+        self.mod_directory_edit = QtWidgets.QLineEdit(self)
+        self.mod_directory_edit.setText(settings.get("mod_directory", ""))
+        mod_dir_browse = QtWidgets.QPushButton("Parcourir...")
+        mod_dir_browse.clicked.connect(lambda: self._browse_directory(self.mod_directory_edit))
+
+        mod_dir_layout = QtWidgets.QHBoxLayout()
+        mod_dir_layout.addWidget(QtWidgets.QLabel("Dossier des mods :"))
+        mod_dir_layout.addWidget(self.mod_directory_edit)
+        mod_dir_layout.addWidget(mod_dir_browse)
+        layout.addLayout(mod_dir_layout)
+
+        self.cache_directory_edit = QtWidgets.QLineEdit(self)
+        self.cache_directory_edit.setText(settings.get("sims_cache_directory", ""))
+        cache_dir_browse = QtWidgets.QPushButton("Parcourir...")
+        cache_dir_browse.clicked.connect(lambda: self._browse_directory(self.cache_directory_edit))
+
+        cache_dir_layout = QtWidgets.QHBoxLayout()
+        cache_dir_layout.addWidget(QtWidgets.QLabel("Dossier caches sims :"))
+        cache_dir_layout.addWidget(self.cache_directory_edit)
+        cache_dir_layout.addWidget(cache_dir_browse)
+        layout.addLayout(cache_dir_layout)
+
+        self.backups_directory_edit = QtWidgets.QLineEdit(self)
+        self.backups_directory_edit.setText(settings.get("backups_directory", ""))
+        backups_dir_browse = QtWidgets.QPushButton("Parcourir...")
+        backups_dir_browse.clicked.connect(lambda: self._browse_directory(self.backups_directory_edit))
+
+        backups_dir_layout = QtWidgets.QHBoxLayout()
+        backups_dir_layout.addWidget(QtWidgets.QLabel("Dossier Backups :"))
+        backups_dir_layout.addWidget(self.backups_directory_edit)
+        backups_dir_layout.addWidget(backups_dir_browse)
+        layout.addLayout(backups_dir_layout)
+
+        button_box = QtWidgets.QDialogButtonBox()
+        save_button = button_box.addButton("Sauvegarder", QtWidgets.QDialogButtonBox.AcceptRole)
+        cancel_button = button_box.addButton(QtWidgets.QDialogButtonBox.Cancel)
+        save_button.clicked.connect(self._save_configuration)
+        cancel_button.clicked.connect(self.reject)
+        layout.addWidget(button_box)
+
+        self.setLayout(layout)
+
+    def _browse_directory(self, target_edit):
+        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Choisir un dossier")
+        if folder:
+            target_edit.setText(folder)
+
+    def _save_configuration(self):
+        mod_directory = self.mod_directory_edit.text().strip()
+        cache_directory = self.cache_directory_edit.text().strip()
+        backups_directory = self.backups_directory_edit.text().strip()
+
+        if self._parent is not None:
+            self._parent.apply_configuration(mod_directory, cache_directory, backups_directory)
+        self.accept()
+
+
 class ModManagerApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -206,18 +289,15 @@ class ModManagerApp(QtWidgets.QWidget):
             }
         """)
 
-        # Dossier des mods
-        self.mod_directory_input = QtWidgets.QLineEdit(self)
-        self.mod_directory_input.setText(self.settings.get("mod_directory", ""))
-        browse_button = QtWidgets.QPushButton("Parcourir...", self)
-        browse_button.clicked.connect(self.browse_directory)
-
+        # Dossier des mods (affichage uniquement)
         mod_dir_layout = QtWidgets.QHBoxLayout()
         mod_dir_layout.addWidget(QtWidgets.QLabel("Dossier des mods :"))
-        mod_dir_layout.addWidget(self.mod_directory_input)
-        mod_dir_layout.addWidget(browse_button)
+        self.mod_directory_label = QtWidgets.QLabel()
+        self.mod_directory_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        mod_dir_layout.addWidget(self.mod_directory_label, stretch=1)
 
         layout.addLayout(mod_dir_layout)
+        self.update_mod_directory_label()
 
         # Filtrage
         self.hide_post_118_checkbox = QtWidgets.QCheckBox("Masquer mods post‑patch 1.118", self)
@@ -266,27 +346,28 @@ class ModManagerApp(QtWidgets.QWidget):
         layout.addWidget(self.table, stretch=1)
 
         # Boutons
+        self.configuration_button = QtWidgets.QPushButton("Configuration", self)
+        self.configuration_button.clicked.connect(self.open_configuration)
+
         self.refresh_button = QtWidgets.QPushButton("Analyser / Rafraîchir", self)
         self.refresh_button.clicked.connect(self.refresh_tree)
 
         self.export_button = QtWidgets.QPushButton("Exporter vers Excel", self)
         self.export_button.clicked.connect(self.export_current)
 
+        self.clear_cache_button = QtWidgets.QPushButton("Clear Sims4 Cache", self)
+        self.clear_cache_button.clicked.connect(self.clear_sims4_cache)
+
         button_layout = QtWidgets.QHBoxLayout()
+        button_layout.addWidget(self.configuration_button)
         button_layout.addWidget(self.refresh_button)
         button_layout.addWidget(self.export_button)
+        button_layout.addWidget(self.clear_cache_button)
 
         layout.addLayout(button_layout)
 
         # Final
         self.setLayout(layout)
-
-    def browse_directory(self):
-        folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Choisir un dossier")
-        if folder:
-            self.mod_directory_input.setText(folder)
-            self.settings["mod_directory"] = folder
-            save_settings(self.settings)
 
     def toggle_setting(self, key):
         self.settings[key] = getattr(self, f"{key}_checkbox").isChecked()
@@ -298,13 +379,36 @@ class ModManagerApp(QtWidgets.QWidget):
         save_settings(self.settings)
         self.refresh_table_only()
 
+    def update_mod_directory_label(self):
+        directory = self.settings.get("mod_directory", "")
+        display_text = directory if directory else "(non défini)"
+        self.mod_directory_label.setText(display_text)
+
+    def open_configuration(self):
+        dialog = ConfigurationDialog(self, dict(self.settings))
+        dialog.exec_()
+
+    def apply_configuration(self, mod_directory, cache_directory, backups_directory):
+        previous_mod_directory = self.settings.get("mod_directory", "")
+        self.settings["mod_directory"] = mod_directory
+        self.settings["sims_cache_directory"] = cache_directory
+        self.settings["backups_directory"] = backups_directory
+        save_settings(self.settings)
+        self.update_mod_directory_label()
+
+        if previous_mod_directory != mod_directory:
+            self.last_scanned_directory = ""
+            if hasattr(self, "table"):
+                self.table.setRowCount(0)
+
     def refresh_tree(self):
-        folder = self.mod_directory_input.text()
+        folder = self.settings.get("mod_directory", "")
         if not folder or not os.path.isdir(folder):
-            QtWidgets.QMessageBox.critical(self, "Erreur", "Sélectionne un dossier valide.")
+            QtWidgets.QMessageBox.critical(self, "Erreur", "Sélectionne un dossier valide dans la configuration.")
             return
         self.settings["mod_directory"] = folder
         save_settings(self.settings)
+        self.update_mod_directory_label()
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = folder
         rows = generate_data_rows(folder, self.settings)
@@ -315,6 +419,51 @@ class ModManagerApp(QtWidgets.QWidget):
             self.ignored_mods = set(self.settings.get("ignored_mods", []))
             rows = generate_data_rows(self.last_scanned_directory, self.settings)
             self.populate_table(rows)
+
+    def clear_sims4_cache(self):
+        cache_directory = self.settings.get("sims_cache_directory", "")
+        if not cache_directory or not os.path.isdir(cache_directory):
+            QtWidgets.QMessageBox.warning(self, "Dossier cache invalide", "Configure un dossier cache Sims 4 valide dans la configuration.")
+            return
+
+        targets = [
+            "localthumbcache.package",
+            "localsimtexturecache.package",
+            "avatarcache.package",
+            "cachestr",
+            "onlinethumbnailcache",
+        ]
+
+        removed = []
+        missing = []
+        errors = []
+
+        for item in targets:
+            path = os.path.join(cache_directory, item)
+            if not os.path.exists(path):
+                missing.append(item)
+                continue
+            try:
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+                removed.append(item)
+            except OSError as exc:
+                errors.append(f"{item} : {exc}")
+
+        messages = []
+        if removed:
+            messages.append("Supprimé : " + ", ".join(removed))
+        if missing:
+            messages.append("Absent : " + ", ".join(missing))
+        if errors:
+            messages.append("Erreurs :\n" + "\n".join(errors))
+
+        if not messages:
+            messages.append("Aucun fichier ou dossier à supprimer.")
+
+        QtWidgets.QMessageBox.information(self, "Nettoyage du cache", "\n".join(messages))
 
     def populate_table(self, data_rows):
         header = self.table.horizontalHeader()
