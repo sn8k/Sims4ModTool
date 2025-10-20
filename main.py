@@ -9,7 +9,7 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.7"
+APP_VERSION = "v3.8"
 APP_VERSION_DATE = "20/10/2025"
 
 
@@ -116,7 +116,8 @@ def generate_data_rows(directory, settings):
             "script": script_file if script_path else "",
             "script_date": format_datetime(script_date),
             "ignored": ignored,
-            "ignore_candidates": candidates or [pkg]
+            "ignore_candidates": candidates or [pkg],
+            "paths": [path for path in (pkg_path, script_path) if path]
         })
 
     # ts4script orphans
@@ -147,7 +148,8 @@ def generate_data_rows(directory, settings):
             "script": script,
             "script_date": format_datetime(script_date),
             "ignored": ignored,
-            "ignore_candidates": candidates
+            "ignore_candidates": candidates,
+            "paths": [script_path]
         })
 
     return data_rows
@@ -335,6 +337,7 @@ class ModManagerApp(QtWidgets.QWidget):
                 item = QtWidgets.QTableWidgetItem(str(value))
                 if col_idx == 0:
                     item.setData(QtCore.Qt.UserRole, row.get("ignore_candidates", []))
+                    item.setData(QtCore.Qt.UserRole + 1, row.get("paths", []))
                 self.table.setItem(row_position, col_idx, item)
 
             # Ajouter la case à cocher dans la colonne "Ignoré"
@@ -368,6 +371,8 @@ class ModManagerApp(QtWidgets.QWidget):
 
         menu = QtWidgets.QMenu(self)
         ignore_action = menu.addAction("Ignorer")
+        show_in_explorer_action = menu.addAction("Afficher dans l'explorateur")
+        delete_action = menu.addAction("Supprimer le mod")
         google_action = menu.addAction("Recherche Google")
 
         selected_action = menu.exec_(self.table.viewport().mapToGlobal(position))
@@ -376,8 +381,83 @@ class ModManagerApp(QtWidgets.QWidget):
             checkbox = self.table.cellWidget(row, 5)
             if checkbox is not None:
                 checkbox.setChecked(not checkbox.isChecked())
+        elif selected_action == show_in_explorer_action:
+            self.show_in_explorer(row, candidates)
+        elif selected_action == delete_action:
+            self.delete_mod(row, candidates)
         elif selected_action == google_action:
             self.launch_google_search(row, candidates)
+
+    def _resolve_row_paths(self, row):
+        status_item = self.table.item(row, 0)
+        if status_item is None:
+            return []
+        paths = status_item.data(QtCore.Qt.UserRole + 1)
+        return list(paths) if paths else []
+
+    def show_in_explorer(self, row, candidates):
+        paths = self._resolve_row_paths(row)
+        if not paths:
+            return
+        target_path = paths[0]
+        if not os.path.exists(target_path):
+            QtWidgets.QMessageBox.warning(self, "Fichier introuvable", "Le fichier sélectionné est introuvable sur le disque.")
+            return
+
+        directory = os.path.dirname(target_path) or target_path
+        if sys.platform.startswith("win"):
+            try:
+                os.startfile(directory)
+            except OSError:
+                QtWidgets.QMessageBox.warning(self, "Erreur", "Impossible d'ouvrir l'explorateur de fichiers.")
+        elif sys.platform == "darwin":
+            QtCore.QProcess.startDetached("open", [directory])
+        else:
+            QtCore.QProcess.startDetached("xdg-open", [directory])
+
+    def delete_mod(self, row, candidates):
+        paths = self._resolve_row_paths(row)
+        if not paths:
+            return
+
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Confirmer la suppression",
+            "Supprimer ce mod supprimera définitivement les fichiers associés. Continuer ?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+
+        if confirm != QtWidgets.QMessageBox.Yes:
+            return
+
+        errors = []
+        for path in paths:
+            if not os.path.exists(path):
+                continue
+            try:
+                os.remove(path)
+            except OSError as exc:
+                errors.append(str(exc))
+
+        if errors:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Erreur lors de la suppression",
+                "\n".join(errors),
+            )
+
+        if candidates:
+            for name in candidates:
+                self.ignored_mods.discard(name)
+            save_ignore_list(self.ignored_mods)
+            self.settings["ignored_mods"] = sorted(self.ignored_mods)
+            save_settings(self.settings)
+
+        if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
+            self.refresh_table_only()
+        else:
+            self.table.removeRow(row)
 
     def launch_google_search(self, row, candidates):
         file_name = ""
