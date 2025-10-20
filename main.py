@@ -10,8 +10,8 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.9"
-APP_VERSION_DATE = "20/10/2025"
+APP_VERSION = "v3.10"
+APP_VERSION_DATE = "20/10/2025 23:08 UTC"
 
 
 def format_datetime(value):
@@ -52,6 +52,7 @@ def load_settings(path=SETTINGS_PATH):
             "sims_cache_directory": "",
             "backups_directory": "",
             "xls_file_path": "",
+            "sims_executable_path": "",
             "ignored_mods": [],  # Liste des mods ignorés
             "show_ignored": False  # Contrôle si les mods ignorés doivent être affichés
         }
@@ -63,6 +64,7 @@ def load_settings(path=SETTINGS_PATH):
         "sims_cache_directory": "",
         "backups_directory": "",
         "xls_file_path": "",
+        "sims_executable_path": "",
         "ignored_mods": [],
         "show_ignored": False,
     }
@@ -228,6 +230,17 @@ class ConfigurationDialog(QtWidgets.QDialog):
         backups_dir_layout.addWidget(backups_dir_browse)
         layout.addLayout(backups_dir_layout)
 
+        self.sims_executable_edit = QtWidgets.QLineEdit(self)
+        self.sims_executable_edit.setText(settings.get("sims_executable_path", ""))
+        sims_exec_browse = QtWidgets.QPushButton("Parcourir...")
+        sims_exec_browse.clicked.connect(self._browse_executable)
+
+        sims_exec_layout = QtWidgets.QHBoxLayout()
+        sims_exec_layout.addWidget(QtWidgets.QLabel("Exécutable TS4_X64.exe :"))
+        sims_exec_layout.addWidget(self.sims_executable_edit)
+        sims_exec_layout.addWidget(sims_exec_browse)
+        layout.addLayout(sims_exec_layout)
+
         button_box = QtWidgets.QDialogButtonBox()
         save_button = button_box.addButton("Sauvegarder", QtWidgets.QDialogButtonBox.AcceptRole)
         cancel_button = button_box.addButton(QtWidgets.QDialogButtonBox.Cancel)
@@ -242,13 +255,29 @@ class ConfigurationDialog(QtWidgets.QDialog):
         if folder:
             target_edit.setText(folder)
 
+    def _browse_executable(self):
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Sélectionner TS4_X64.exe",
+            "",
+            "Executable Sims 4 (TS4_X64.exe);;Tous les fichiers (*)"
+        )
+        if file_path:
+            self.sims_executable_edit.setText(file_path)
+
     def _save_configuration(self):
         mod_directory = self.mod_directory_edit.text().strip()
         cache_directory = self.cache_directory_edit.text().strip()
         backups_directory = self.backups_directory_edit.text().strip()
+        sims_executable_path = self.sims_executable_edit.text().strip()
 
         if self._parent is not None:
-            self._parent.apply_configuration(mod_directory, cache_directory, backups_directory)
+            self._parent.apply_configuration(
+                mod_directory,
+                cache_directory,
+                backups_directory,
+                sims_executable_path,
+            )
         self.accept()
 
 
@@ -358,16 +387,21 @@ class ModManagerApp(QtWidgets.QWidget):
         self.clear_cache_button = QtWidgets.QPushButton("Clear Sims4 Cache", self)
         self.clear_cache_button.clicked.connect(self.clear_sims4_cache)
 
+        self.launch_button = QtWidgets.QPushButton("Launch Sims 4", self)
+        self.launch_button.clicked.connect(self.launch_sims4)
+
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addWidget(self.configuration_button)
         button_layout.addWidget(self.refresh_button)
         button_layout.addWidget(self.export_button)
         button_layout.addWidget(self.clear_cache_button)
+        button_layout.addWidget(self.launch_button)
 
         layout.addLayout(button_layout)
 
         # Final
         self.setLayout(layout)
+        self.update_launch_button_state()
 
     def toggle_setting(self, key):
         self.settings[key] = getattr(self, f"{key}_checkbox").isChecked()
@@ -388,13 +422,15 @@ class ModManagerApp(QtWidgets.QWidget):
         dialog = ConfigurationDialog(self, dict(self.settings))
         dialog.exec_()
 
-    def apply_configuration(self, mod_directory, cache_directory, backups_directory):
+    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path):
         previous_mod_directory = self.settings.get("mod_directory", "")
         self.settings["mod_directory"] = mod_directory
         self.settings["sims_cache_directory"] = cache_directory
         self.settings["backups_directory"] = backups_directory
+        self.settings["sims_executable_path"] = sims_executable_path
         save_settings(self.settings)
         self.update_mod_directory_label()
+        self.update_launch_button_state()
 
         if previous_mod_directory != mod_directory:
             self.last_scanned_directory = ""
@@ -464,6 +500,31 @@ class ModManagerApp(QtWidgets.QWidget):
             messages.append("Aucun fichier ou dossier à supprimer.")
 
         QtWidgets.QMessageBox.information(self, "Nettoyage du cache", "\n".join(messages))
+
+    def launch_sims4(self):
+        executable_path = self.settings.get("sims_executable_path", "")
+        if not executable_path:
+            QtWidgets.QMessageBox.warning(self, "Exécutable manquant", "Configure le chemin de TS4_X64.exe dans la configuration.")
+            return
+
+        if not os.path.isfile(executable_path):
+            QtWidgets.QMessageBox.critical(self, "Exécutable introuvable", "Le fichier TS4_X64.exe configuré est introuvable.")
+            return
+
+        try:
+            if sys.platform.startswith("win"):
+                os.startfile(executable_path)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                QtCore.QProcess.startDetached("open", [executable_path])
+            else:
+                QtCore.QProcess.startDetached(executable_path)
+        except OSError as exc:
+            QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible de lancer Sims 4 : {exc}")
+
+    def update_launch_button_state(self):
+        if hasattr(self, "launch_button"):
+            executable_path = self.settings.get("sims_executable_path", "")
+            self.launch_button.setEnabled(bool(executable_path))
 
     def populate_table(self, data_rows):
         header = self.table.horizontalHeader()
