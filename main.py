@@ -8,7 +8,7 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.4"
+APP_VERSION = "v3.5"
 APP_VERSION_DATE = "20/10/2025"
 
 
@@ -249,8 +249,12 @@ class ModManagerApp(QtWidgets.QWidget):
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
 
         header = self.table.horizontalHeader()
-        header.setSectionResizeMode(QtWidgets.QHeaderView.Stretch)
-        header.setStretchLastSection(True)
+        for column in range(self.table.columnCount()):
+            resize_mode = QtWidgets.QHeaderView.Stretch
+            if column in (0, self.table.columnCount() - 1):
+                resize_mode = QtWidgets.QHeaderView.ResizeToContents
+            header.setSectionResizeMode(column, resize_mode)
+        header.setStretchLastSection(False)
         self.table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
         layout.addWidget(self.table, stretch=1)
