@@ -2,6 +2,8 @@ import sys
 import os
 import json
 import shutil
+import shlex
+import re
 from functools import partial
 from urllib.parse import quote_plus
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -10,8 +12,8 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.10"
-APP_VERSION_DATE = "20/10/2025 23:08 UTC"
+APP_VERSION = "v3.11"
+APP_VERSION_DATE = "20/10/2025 23:39 UTC"
 
 
 def format_datetime(value):
@@ -53,6 +55,8 @@ def load_settings(path=SETTINGS_PATH):
             "backups_directory": "",
             "xls_file_path": "",
             "sims_executable_path": "",
+            "sims_executable_arguments": "",
+            "log_extra_extensions": [],
             "ignored_mods": [],  # Liste des mods ignorés
             "show_ignored": False  # Contrôle si les mods ignorés doivent être affichés
         }
@@ -65,11 +69,22 @@ def load_settings(path=SETTINGS_PATH):
         "backups_directory": "",
         "xls_file_path": "",
         "sims_executable_path": "",
+        "sims_executable_arguments": "",
+        "log_extra_extensions": [],
         "ignored_mods": [],
         "show_ignored": False,
     }
     for key, value in defaults.items():
         settings.setdefault(key, value)
+    if isinstance(settings.get("log_extra_extensions"), str):
+        settings["log_extra_extensions"] = [part.strip() for part in settings["log_extra_extensions"].split(",") if part.strip()]
+    extra_extensions = []
+    for entry in settings.get("log_extra_extensions", []):
+        if not entry:
+            continue
+        ext = entry if entry.startswith(".") else f".{entry}"
+        extra_extensions.append(ext.lower())
+    settings["log_extra_extensions"] = sorted(set(extra_extensions))
     ignored_from_file = load_ignore_list()
     if not ignored_from_file and settings.get("ignored_mods"):
         ignored_from_file = settings.get("ignored_mods", [])
@@ -241,6 +256,25 @@ class ConfigurationDialog(QtWidgets.QDialog):
         sims_exec_layout.addWidget(sims_exec_browse)
         layout.addLayout(sims_exec_layout)
 
+        self.sims_arguments_edit = QtWidgets.QLineEdit(self)
+        self.sims_arguments_edit.setText(settings.get("sims_executable_arguments", ""))
+        self.sims_arguments_edit.setPlaceholderText("Arguments supplémentaires (ex: -w)")
+
+        sims_args_layout = QtWidgets.QHBoxLayout()
+        sims_args_layout.addWidget(QtWidgets.QLabel("Arguments TS4_X64.exe :"))
+        sims_args_layout.addWidget(self.sims_arguments_edit)
+        layout.addLayout(sims_args_layout)
+
+        self.log_extensions_edit = QtWidgets.QLineEdit(self)
+        extra_extensions = ", ".join(settings.get("log_extra_extensions", []))
+        self.log_extensions_edit.setText(extra_extensions)
+        self.log_extensions_edit.setPlaceholderText("Extensions supplémentaires (.mdmp, .html, ...)")
+
+        logs_ext_layout = QtWidgets.QHBoxLayout()
+        logs_ext_layout.addWidget(QtWidgets.QLabel("Extensions de logs (supplémentaires) :"))
+        logs_ext_layout.addWidget(self.log_extensions_edit)
+        layout.addLayout(logs_ext_layout)
+
         button_box = QtWidgets.QDialogButtonBox()
         save_button = button_box.addButton("Sauvegarder", QtWidgets.QDialogButtonBox.AcceptRole)
         cancel_button = button_box.addButton(QtWidgets.QDialogButtonBox.Cancel)
@@ -270,6 +304,18 @@ class ConfigurationDialog(QtWidgets.QDialog):
         cache_directory = self.cache_directory_edit.text().strip()
         backups_directory = self.backups_directory_edit.text().strip()
         sims_executable_path = self.sims_executable_edit.text().strip()
+        sims_executable_arguments = self.sims_arguments_edit.text().strip()
+        log_extensions_text = self.log_extensions_edit.text().strip()
+
+        extra_extensions = []
+        if log_extensions_text:
+            for part in re.split(r"[,;\s]+", log_extensions_text):
+                cleaned = part.strip()
+                if not cleaned:
+                    continue
+                if not cleaned.startswith("."):
+                    cleaned = f".{cleaned}"
+                extra_extensions.append(cleaned.lower())
 
         if self._parent is not None:
             self._parent.apply_configuration(
@@ -277,6 +323,8 @@ class ConfigurationDialog(QtWidgets.QDialog):
                 cache_directory,
                 backups_directory,
                 sims_executable_path,
+                sims_executable_arguments,
+                sorted(set(extra_extensions)),
             )
         self.accept()
 
@@ -387,6 +435,9 @@ class ModManagerApp(QtWidgets.QWidget):
         self.clear_cache_button = QtWidgets.QPushButton("Clear Sims4 Cache", self)
         self.clear_cache_button.clicked.connect(self.clear_sims4_cache)
 
+        self.grab_logs_button = QtWidgets.QPushButton("Grab Logs", self)
+        self.grab_logs_button.clicked.connect(self.grab_logs)
+
         self.launch_button = QtWidgets.QPushButton("Launch Sims 4", self)
         self.launch_button.clicked.connect(self.launch_sims4)
 
@@ -395,6 +446,7 @@ class ModManagerApp(QtWidgets.QWidget):
         button_layout.addWidget(self.refresh_button)
         button_layout.addWidget(self.export_button)
         button_layout.addWidget(self.clear_cache_button)
+        button_layout.addWidget(self.grab_logs_button)
         button_layout.addWidget(self.launch_button)
 
         layout.addLayout(button_layout)
@@ -422,12 +474,14 @@ class ModManagerApp(QtWidgets.QWidget):
         dialog = ConfigurationDialog(self, dict(self.settings))
         dialog.exec_()
 
-    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path):
+    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions):
         previous_mod_directory = self.settings.get("mod_directory", "")
         self.settings["mod_directory"] = mod_directory
         self.settings["sims_cache_directory"] = cache_directory
         self.settings["backups_directory"] = backups_directory
         self.settings["sims_executable_path"] = sims_executable_path
+        self.settings["sims_executable_arguments"] = sims_executable_arguments
+        self.settings["log_extra_extensions"] = sorted(set(log_extra_extensions))
         save_settings(self.settings)
         self.update_mod_directory_label()
         self.update_launch_button_state()
@@ -501,6 +555,87 @@ class ModManagerApp(QtWidgets.QWidget):
 
         QtWidgets.QMessageBox.information(self, "Nettoyage du cache", "\n".join(messages))
 
+    def grab_logs(self):
+        mod_directory = self.settings.get("mod_directory", "")
+        if not mod_directory or not os.path.isdir(mod_directory):
+            QtWidgets.QMessageBox.warning(self, "Dossier des mods invalide", "Définis un dossier des mods valide dans la configuration avant d'extraire les logs.")
+            return
+
+        backups_directory = self.settings.get("backups_directory", "")
+        if not backups_directory:
+            QtWidgets.QMessageBox.warning(self, "Dossier backups manquant", "Définis un dossier de backups dans la configuration avant d'extraire les logs.")
+            return
+
+        os.makedirs(backups_directory, exist_ok=True)
+
+        extensions = {".log", ".txt"}
+        extensions.update(self.settings.get("log_extra_extensions", []))
+
+        search_roots = []
+        normalized_mod_dir = os.path.normpath(mod_directory)
+        if os.path.isdir(normalized_mod_dir):
+            search_roots.append(normalized_mod_dir)
+            parent_dir = os.path.dirname(normalized_mod_dir)
+            if parent_dir and os.path.isdir(parent_dir):
+                search_roots.append(parent_dir)
+
+        backups_directory_norm = os.path.normpath(backups_directory)
+        found_logs = []
+
+        for root in dict.fromkeys(search_roots):
+            for current_root, dirs, files in os.walk(root):
+                dirs[:] = [d for d in dirs if os.path.normpath(os.path.join(current_root, d)) != backups_directory_norm]
+                for file_name in files:
+                    _, ext = os.path.splitext(file_name)
+                    if ext.lower() in extensions:
+                        file_path = os.path.join(current_root, file_name)
+                        normalized_file = os.path.normpath(file_path)
+                        try:
+                            if os.path.commonpath([normalized_file, backups_directory_norm]) == backups_directory_norm:
+                                continue
+                        except ValueError:
+                            pass
+                        found_logs.append((file_path, root))
+
+        if not found_logs:
+            QtWidgets.QMessageBox.information(self, "Aucun log", "Aucun fichier de log correspondant n'a été trouvé.")
+            return
+
+        timestamp = datetime.now().strftime("Logs_%Y%m%d_%H%M%S")
+        destination_root = os.path.join(backups_directory, timestamp)
+        os.makedirs(destination_root, exist_ok=True)
+
+        moved_files = []
+        errors = []
+        for source_path, base_root in found_logs:
+            relative_path = os.path.relpath(source_path, base_root)
+            destination_path = os.path.join(destination_root, relative_path)
+            destination_dir = os.path.dirname(destination_path)
+            os.makedirs(destination_dir, exist_ok=True)
+
+            final_destination = destination_path
+            counter = 1
+            while os.path.exists(final_destination):
+                name, ext = os.path.splitext(destination_path)
+                final_destination = f"{name}_{counter}{ext}"
+                counter += 1
+
+            try:
+                shutil.move(source_path, final_destination)
+                moved_files.append(final_destination)
+            except OSError as exc:
+                errors.append(f"{source_path} → {exc}")
+
+        if not moved_files:
+            QtWidgets.QMessageBox.information(self, "Aucun log déplacé", "Aucun fichier n'a pu être déplacé.")
+            return
+
+        message_lines = [f"{len(moved_files)} fichier(s) de log déplacé(s) vers {destination_root}."]
+        if errors:
+            message_lines.append("\nErreurs:\n" + "\n".join(errors))
+        QtWidgets.QMessageBox.information(self, "Logs sauvegardés", "\n".join(message_lines))
+        self._open_in_file_manager(destination_root)
+
     def launch_sims4(self):
         executable_path = self.settings.get("sims_executable_path", "")
         if not executable_path:
@@ -511,20 +646,29 @@ class ModManagerApp(QtWidgets.QWidget):
             QtWidgets.QMessageBox.critical(self, "Exécutable introuvable", "Le fichier TS4_X64.exe configuré est introuvable.")
             return
 
+        args_text = self.settings.get("sims_executable_arguments", "").strip()
         try:
-            if sys.platform.startswith("win"):
-                os.startfile(executable_path)  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                QtCore.QProcess.startDetached("open", [executable_path])
+            args = shlex.split(args_text, posix=not sys.platform.startswith("win")) if args_text else []
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Arguments invalides", f"Les arguments spécifiés sont invalides : {exc}")
+            return
+
+        try:
+            if sys.platform == "darwin":
+                started = QtCore.QProcess.startDetached(executable_path, args)
+            elif sys.platform.startswith("win"):
+                started = QtCore.QProcess.startDetached(executable_path, args)
             else:
-                QtCore.QProcess.startDetached(executable_path)
+                started = QtCore.QProcess.startDetached(executable_path, args)
+            if not started:
+                raise OSError("le processus n'a pas pu être démarré")
         except OSError as exc:
             QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible de lancer Sims 4 : {exc}")
 
     def update_launch_button_state(self):
         if hasattr(self, "launch_button"):
             executable_path = self.settings.get("sims_executable_path", "")
-            self.launch_button.setEnabled(bool(executable_path))
+            self.launch_button.setEnabled(bool(executable_path and os.path.isfile(executable_path)))
 
     def populate_table(self, data_rows):
         header = self.table.horizontalHeader()
@@ -605,6 +749,17 @@ class ModManagerApp(QtWidgets.QWidget):
         paths = status_item.data(QtCore.Qt.UserRole + 1)
         return list(paths) if paths else []
 
+    def _open_in_file_manager(self, target_path):
+        if sys.platform.startswith("win"):
+            try:
+                os.startfile(target_path)
+            except OSError:
+                QtWidgets.QMessageBox.warning(self, "Erreur", "Impossible d'ouvrir l'explorateur de fichiers.")
+        elif sys.platform == "darwin":
+            QtCore.QProcess.startDetached("open", [target_path])
+        else:
+            QtCore.QProcess.startDetached("xdg-open", [target_path])
+
     def show_in_explorer(self, row, candidates):
         paths = self._resolve_row_paths(row)
         if not paths:
@@ -615,15 +770,7 @@ class ModManagerApp(QtWidgets.QWidget):
             return
 
         directory = os.path.dirname(target_path) or target_path
-        if sys.platform.startswith("win"):
-            try:
-                os.startfile(directory)
-            except OSError:
-                QtWidgets.QMessageBox.warning(self, "Erreur", "Impossible d'ouvrir l'explorateur de fichiers.")
-        elif sys.platform == "darwin":
-            QtCore.QProcess.startDetached("open", [directory])
-        else:
-            QtCore.QProcess.startDetached("xdg-open", [directory])
+        self._open_in_file_manager(directory)
 
     def delete_mod(self, row, candidates):
         paths = self._resolve_row_paths(row)
