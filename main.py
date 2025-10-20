@@ -8,7 +8,7 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.5"
+APP_VERSION = "v3.6"
 APP_VERSION_DATE = "20/10/2025"
 
 
@@ -255,6 +255,7 @@ class ModManagerApp(QtWidgets.QWidget):
                 resize_mode = QtWidgets.QHeaderView.ResizeToContents
             header.setSectionResizeMode(column, resize_mode)
         header.setStretchLastSection(False)
+        self.table.setSortingEnabled(True)
         self.table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
 
         layout.addWidget(self.table, stretch=1)
@@ -311,6 +312,11 @@ class ModManagerApp(QtWidgets.QWidget):
             self.populate_table(rows)
 
     def populate_table(self, data_rows):
+        header = self.table.horizontalHeader()
+        sorting_enabled = self.table.isSortingEnabled()
+        sort_section = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(0)  # Clear previous data
         for row in data_rows:
             row_position = self.table.rowCount()
@@ -329,12 +335,20 @@ class ModManagerApp(QtWidgets.QWidget):
                 self.table.setItem(row_position, col_idx, item)
 
             # Ajouter la case à cocher dans la colonne "Ignoré"
+            ignored = row.get("ignored", False)
+            ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
+            ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
+            ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+            self.table.setItem(row_position, 5, ignore_item)
             ignore_checkbox = QtWidgets.QCheckBox()
             ignore_checkbox.stateChanged.connect(partial(self.update_ignore_mod, row.get("ignore_candidates", [])))
             ignore_checkbox.blockSignals(True)
-            ignore_checkbox.setChecked(row.get("ignored", False))
+            ignore_checkbox.setChecked(ignored)
             ignore_checkbox.blockSignals(False)
             self.table.setCellWidget(row_position, 5, ignore_checkbox)
+        self.table.setSortingEnabled(sorting_enabled)
+        if sorting_enabled:
+            self.table.sortByColumn(sort_section, sort_order)
 
     def update_ignore_mod(self, candidates, state):
         candidates = [name for name in candidates if name]
