@@ -2,13 +2,14 @@ import sys
 import os
 import json
 from functools import partial
-from PyQt5 import QtWidgets, QtCore
+from urllib.parse import quote_plus
+from PyQt5 import QtWidgets, QtCore, QtGui
 from datetime import datetime
 from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.6"
+APP_VERSION = "v3.7"
 APP_VERSION_DATE = "20/10/2025"
 
 
@@ -251,12 +252,14 @@ class ModManagerApp(QtWidgets.QWidget):
         header = self.table.horizontalHeader()
         for column in range(self.table.columnCount()):
             resize_mode = QtWidgets.QHeaderView.Stretch
-            if column in (0, self.table.columnCount() - 1):
+            if column in (0, 2, 4, self.table.columnCount() - 1):
                 resize_mode = QtWidgets.QHeaderView.ResizeToContents
             header.setSectionResizeMode(column, resize_mode)
         header.setStretchLastSection(False)
         self.table.setSortingEnabled(True)
         self.table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self.show_context_menu)
 
         layout.addWidget(self.table, stretch=1)
 
@@ -349,6 +352,55 @@ class ModManagerApp(QtWidgets.QWidget):
         self.table.setSortingEnabled(sorting_enabled)
         if sorting_enabled:
             self.table.sortByColumn(sort_section, sort_order)
+
+    def show_context_menu(self, position):
+        index = self.table.indexAt(position)
+        if not index.isValid():
+            return
+
+        row = index.row()
+        status_item = self.table.item(row, 0)
+        candidates = []
+        if status_item is not None:
+            stored_candidates = status_item.data(QtCore.Qt.UserRole)
+            if stored_candidates:
+                candidates = list(stored_candidates)
+
+        menu = QtWidgets.QMenu(self)
+        ignore_action = menu.addAction("Ignorer")
+        google_action = menu.addAction("Recherche Google")
+
+        selected_action = menu.exec_(self.table.viewport().mapToGlobal(position))
+
+        if selected_action == ignore_action:
+            checkbox = self.table.cellWidget(row, 5)
+            if checkbox is not None:
+                checkbox.setChecked(not checkbox.isChecked())
+        elif selected_action == google_action:
+            self.launch_google_search(row, candidates)
+
+    def launch_google_search(self, row, candidates):
+        file_name = ""
+        for column in (1, 3):
+            item = self.table.item(row, column)
+            if item:
+                text = item.text().strip()
+                if text:
+                    file_name = text
+                    break
+
+        if not file_name and candidates:
+            file_name = candidates[0]
+
+        if not file_name:
+            return
+
+        base_name, _ = os.path.splitext(file_name)
+        if not base_name:
+            return
+
+        search_url = QtCore.QUrl(f"https://www.google.com/search?q={quote_plus(base_name)}")
+        QtGui.QDesktopServices.openUrl(search_url)
 
     def update_ignore_mod(self, candidates, state):
         candidates = [name for name in candidates if name]
