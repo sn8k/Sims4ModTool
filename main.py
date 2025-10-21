@@ -12,8 +12,8 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.14"
-APP_VERSION_DATE = "21/10/2025 01:39 UTC"
+APP_VERSION = "v3.15"
+APP_VERSION_DATE = "21/10/2025 16:47 UTC"
 
 
 VERSION_PATTERN = re.compile(r"_v_([0-9]+(?:[._-][0-9A-Za-z]+)*)$", re.IGNORECASE)
@@ -751,17 +751,34 @@ class ModManagerApp(QtWidgets.QWidget):
         if not query:
             filtered_rows = list(self.all_data_rows)
         else:
-            filtered_rows = []
-            for row in self.all_data_rows:
-                haystacks = [
-                    row.get("package", ""),
-                    row.get("script", ""),
-                ]
-                haystacks.extend(row.get("ignore_candidates", []))
-                if any(query in (value or "").lower() for value in haystacks):
-                    filtered_rows.append(row)
+            filtered_rows = [
+                row
+                for row in self.all_data_rows
+                if self._row_matches_query(row, query)
+            ]
 
         self._render_table(filtered_rows)
+
+    def _row_matches_query(self, row, query):
+        for value in self._gather_searchable_values(row):
+            if query in value:
+                return True
+        return False
+
+    def _gather_searchable_values(self, row):
+        values = [
+            str(row.get("status", "")),
+            str(row.get("package", "")),
+            str(row.get("package_date", "")),
+            str(row.get("script", "")),
+            str(row.get("script_date", "")),
+            str(row.get("version", "")),
+        ]
+        ignored_value = "oui" if row.get("ignored", False) else "non"
+        values.append(ignored_value)
+        values.extend(str(candidate) for candidate in row.get("ignore_candidates", []))
+        values.extend(str(path) for path in row.get("paths", []))
+        return [value.lower() for value in values if value]
 
     def _render_table(self, rows):
         header = self.table.horizontalHeader()
