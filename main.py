@@ -12,8 +12,8 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.11"
-APP_VERSION_DATE = "20/10/2025 23:39 UTC"
+APP_VERSION = "v3.12"
+APP_VERSION_DATE = "21/10/2025 01:13 UTC"
 
 
 def format_datetime(value):
@@ -571,31 +571,23 @@ class ModManagerApp(QtWidgets.QWidget):
         extensions = {".log", ".txt"}
         extensions.update(self.settings.get("log_extra_extensions", []))
 
-        search_roots = []
         normalized_mod_dir = os.path.normpath(mod_directory)
-        if os.path.isdir(normalized_mod_dir):
-            search_roots.append(normalized_mod_dir)
-            parent_dir = os.path.dirname(normalized_mod_dir)
-            if parent_dir and os.path.isdir(parent_dir):
-                search_roots.append(parent_dir)
-
         backups_directory_norm = os.path.normpath(backups_directory)
         found_logs = []
 
-        for root in dict.fromkeys(search_roots):
-            for current_root, dirs, files in os.walk(root):
-                dirs[:] = [d for d in dirs if os.path.normpath(os.path.join(current_root, d)) != backups_directory_norm]
-                for file_name in files:
-                    _, ext = os.path.splitext(file_name)
-                    if ext.lower() in extensions:
-                        file_path = os.path.join(current_root, file_name)
-                        normalized_file = os.path.normpath(file_path)
-                        try:
-                            if os.path.commonpath([normalized_file, backups_directory_norm]) == backups_directory_norm:
-                                continue
-                        except ValueError:
-                            pass
-                        found_logs.append((file_path, root))
+        for current_root, dirs, files in os.walk(normalized_mod_dir):
+            dirs[:] = [d for d in dirs if os.path.normpath(os.path.join(current_root, d)) != backups_directory_norm]
+            for file_name in files:
+                _, ext = os.path.splitext(file_name)
+                if ext.lower() in extensions:
+                    file_path = os.path.join(current_root, file_name)
+                    normalized_file = os.path.normpath(file_path)
+                    try:
+                        if os.path.commonpath([normalized_file, backups_directory_norm]) == backups_directory_norm:
+                            continue
+                    except ValueError:
+                        pass
+                    found_logs.append(file_path)
 
         if not found_logs:
             QtWidgets.QMessageBox.information(self, "Aucun log", "Aucun fichier de log correspondant n'a été trouvé.")
@@ -607,8 +599,8 @@ class ModManagerApp(QtWidgets.QWidget):
 
         moved_files = []
         errors = []
-        for source_path, base_root in found_logs:
-            relative_path = os.path.relpath(source_path, base_root)
+        for source_path in found_logs:
+            relative_path = os.path.relpath(source_path, normalized_mod_dir)
             destination_path = os.path.join(destination_root, relative_path)
             destination_dir = os.path.dirname(destination_path)
             os.makedirs(destination_dir, exist_ok=True)
@@ -652,6 +644,22 @@ class ModManagerApp(QtWidgets.QWidget):
         except ValueError as exc:
             QtWidgets.QMessageBox.warning(self, "Arguments invalides", f"Les arguments spécifiés sont invalides : {exc}")
             return
+
+        launch_brief = [
+            "Le jeu va être lancé avec les paramètres suivants :",
+            f"Exécutable : {executable_path}",
+            f"Arguments : {args_text or '(aucun)'}",
+            "",
+            "Lors d'un lancement via le Gestionnaire de Mods, des messages console similaires à ceux-ci peuvent apparaître :",
+            "  • LSX emu version 2.0.0.0",
+            "  • Parsing anadius.cfg / anadius_override.cfg",
+            "  • MinHook initialization succeeded",
+            "  • fake key created / online dll found",
+            "  • game connected on port ...",
+            "",
+            "Ces sorties indiquent simplement que le module LSX est actif pour rediriger la connexion du jeu."
+        ]
+        QtWidgets.QMessageBox.information(self, "Préparation du lancement", "\n".join(launch_brief))
 
         try:
             if sys.platform == "darwin":
