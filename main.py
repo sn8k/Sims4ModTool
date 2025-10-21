@@ -12,8 +12,19 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.12"
-APP_VERSION_DATE = "21/10/2025 01:13 UTC"
+APP_VERSION = "v3.13"
+APP_VERSION_DATE = "21/10/2025 01:27 UTC"
+
+
+VERSION_PATTERN = re.compile(r"_v_([0-9]+(?:[._-][0-9A-Za-z]+)*)$", re.IGNORECASE)
+
+
+def extract_version_from_script_name(script_name):
+    if not script_name:
+        return ""
+    base_name = os.path.splitext(script_name)[0]
+    match = VERSION_PATTERN.search(base_name)
+    return match.group(1) if match else ""
 
 
 def format_datetime(value):
@@ -142,12 +153,15 @@ def generate_data_rows(directory, settings):
         status = "MP"
         if script_path:
             status = "X"
+        version = extract_version_from_script_name(script_file if script_path else "")
+
         data_rows.append({
             "status": status,
             "package": pkg,
             "package_date": format_datetime(pkg_date),
             "script": script_file if script_path else "",
             "script_date": format_datetime(script_date),
+            "version": version,
             "ignored": ignored,
             "ignore_candidates": candidates or [pkg],
             "paths": [path for path in (pkg_path, script_path) if path]
@@ -174,12 +188,15 @@ def generate_data_rows(directory, settings):
             continue
         status = "MS"
 
+        version = extract_version_from_script_name(script)
+
         data_rows.append({
             "status": status,
             "package": "",
             "package_date": "",
             "script": script,
             "script_date": format_datetime(script_date),
+            "version": version,
             "ignored": ignored,
             "ignore_candidates": candidates,
             "paths": [script_path]
@@ -192,7 +209,15 @@ def export_to_excel(save_path, data_rows):
     ws = wb.active
     ws.title = "Mods"
 
-    headers = ["État", "Fichier .package", "Date .package", "Fichier .ts4script", "Date .ts4script", "Ignoré"]
+    headers = [
+        "État",
+        "Fichier .package",
+        "Date .package",
+        "Fichier .ts4script",
+        "Date .ts4script",
+        "Version",
+        "Ignoré",
+    ]
     for idx, h in enumerate(headers, start=1):
         ws.cell(row=1, column=idx, value=h)
 
@@ -403,15 +428,23 @@ class ModManagerApp(QtWidgets.QWidget):
 
         # Table des mods
         self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["État", "Fichier .package", "Date .package", "Fichier .ts4script", "Date .ts4script", "Ignoré"])
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels([
+            "État",
+            "Fichier .package",
+            "Date .package",
+            "Fichier .ts4script",
+            "Date .ts4script",
+            "Version",
+            "Ignoré",
+        ])
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
 
         header = self.table.horizontalHeader()
         for column in range(self.table.columnCount()):
             resize_mode = QtWidgets.QHeaderView.Stretch
-            if column in (0, 2, 4, self.table.columnCount() - 1):
+            if column in (0, 2, 4, 5, self.table.columnCount() - 1):
                 resize_mode = QtWidgets.QHeaderView.ResizeToContents
             header.setSectionResizeMode(column, resize_mode)
         header.setStretchLastSection(False)
@@ -645,22 +678,6 @@ class ModManagerApp(QtWidgets.QWidget):
             QtWidgets.QMessageBox.warning(self, "Arguments invalides", f"Les arguments spécifiés sont invalides : {exc}")
             return
 
-        launch_brief = [
-            "Le jeu va être lancé avec les paramètres suivants :",
-            f"Exécutable : {executable_path}",
-            f"Arguments : {args_text or '(aucun)'}",
-            "",
-            "Lors d'un lancement via le Gestionnaire de Mods, des messages console similaires à ceux-ci peuvent apparaître :",
-            "  • LSX emu version 2.0.0.0",
-            "  • Parsing anadius.cfg / anadius_override.cfg",
-            "  • MinHook initialization succeeded",
-            "  • fake key created / online dll found",
-            "  • game connected on port ...",
-            "",
-            "Ces sorties indiquent simplement que le module LSX est actif pour rediriger la connexion du jeu."
-        ]
-        QtWidgets.QMessageBox.information(self, "Préparation du lancement", "\n".join(launch_brief))
-
         try:
             if sys.platform == "darwin":
                 started = QtCore.QProcess.startDetached(executable_path, args)
@@ -693,7 +710,8 @@ class ModManagerApp(QtWidgets.QWidget):
                 row.get("package", ""),
                 row.get("package_date", ""),
                 row.get("script", ""),
-                row.get("script_date", "")
+                row.get("script_date", ""),
+                row.get("version", ""),
             ]
             for col_idx, value in enumerate(columns):
                 item = QtWidgets.QTableWidgetItem(str(value))
@@ -707,13 +725,13 @@ class ModManagerApp(QtWidgets.QWidget):
             ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
             ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
             ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-            self.table.setItem(row_position, 5, ignore_item)
+            self.table.setItem(row_position, 6, ignore_item)
             ignore_checkbox = QtWidgets.QCheckBox()
             ignore_checkbox.stateChanged.connect(partial(self.update_ignore_mod, row.get("ignore_candidates", [])))
             ignore_checkbox.blockSignals(True)
             ignore_checkbox.setChecked(ignored)
             ignore_checkbox.blockSignals(False)
-            self.table.setCellWidget(row_position, 5, ignore_checkbox)
+            self.table.setCellWidget(row_position, 6, ignore_checkbox)
         self.table.setSortingEnabled(sorting_enabled)
         if sorting_enabled:
             self.table.sortByColumn(sort_section, sort_order)
@@ -740,7 +758,7 @@ class ModManagerApp(QtWidgets.QWidget):
         selected_action = menu.exec_(self.table.viewport().mapToGlobal(position))
 
         if selected_action == ignore_action:
-            checkbox = self.table.cellWidget(row, 5)
+            checkbox = self.table.cellWidget(row, 6)
             if checkbox is not None:
                 checkbox.setChecked(not checkbox.isChecked())
         elif selected_action == show_in_explorer_action:
@@ -870,7 +888,7 @@ class ModManagerApp(QtWidgets.QWidget):
         rows = []
         for row in range(self.table.rowCount()):
             row_data = [self.table.item(row, col).text() for col in range(self.table.columnCount() - 1)]
-            row_data.append(self.table.cellWidget(row, 5).isChecked())  # Ajouter l'état de la case à cocher "Ignoré"
+            row_data.append(self.table.cellWidget(row, 6).isChecked())  # Ajouter l'état de la case à cocher "Ignoré"
             rows.append(row_data)
 
         save_path = self.settings.get("xls_file_path", "")
