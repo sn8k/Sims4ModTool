@@ -12,8 +12,8 @@ from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.13"
-APP_VERSION_DATE = "21/10/2025 01:27 UTC"
+APP_VERSION = "v3.15"
+APP_VERSION_DATE = "21/10/2025 16:47 UTC"
 
 
 VERSION_PATTERN = re.compile(r"_v_([0-9]+(?:[._-][0-9A-Za-z]+)*)$", re.IGNORECASE)
@@ -364,6 +364,7 @@ class ModManagerApp(QtWidgets.QWidget):
         self.settings = load_settings()
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = ""
+        self.all_data_rows = []
 
         self.init_ui()
 
@@ -426,6 +427,15 @@ class ModManagerApp(QtWidgets.QWidget):
 
         layout.addLayout(filter_layout)
 
+        search_layout = QtWidgets.QHBoxLayout()
+        search_layout.addWidget(QtWidgets.QLabel("Recherche mod :"))
+        self.search_edit = QtWidgets.QLineEdit(self)
+        self.search_edit.setPlaceholderText("Nom du mod à rechercher")
+        self.search_edit.textChanged.connect(self.apply_search_filter)
+        search_layout.addWidget(self.search_edit)
+
+        layout.addLayout(search_layout)
+
         # Table des mods
         self.table = QtWidgets.QTableWidget(self)
         self.table.setColumnCount(7)
@@ -474,8 +484,12 @@ class ModManagerApp(QtWidgets.QWidget):
         self.launch_button = QtWidgets.QPushButton("Launch Sims 4", self)
         self.launch_button.clicked.connect(self.launch_sims4)
 
+        self.tools_button = QtWidgets.QPushButton("Tools", self)
+        self.tools_button.clicked.connect(self.open_tools_dialog)
+
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addWidget(self.configuration_button)
+        button_layout.addWidget(self.tools_button)
         button_layout.addWidget(self.refresh_button)
         button_layout.addWidget(self.export_button)
         button_layout.addWidget(self.clear_cache_button)
@@ -695,14 +709,85 @@ class ModManagerApp(QtWidgets.QWidget):
             executable_path = self.settings.get("sims_executable_path", "")
             self.launch_button.setEnabled(bool(executable_path and os.path.isfile(executable_path)))
 
+    def open_tools_dialog(self):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Tools")
+        dialog.setModal(True)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+        button_definitions = [
+            ("Find dupplicates", "La recherche de doublons n'est pas encore disponible."),
+            ("Find non-mods files", "La détection des fichiers non mods sera ajoutée ultérieurement."),
+            ("Disable all mods", "La désactivation des mods sera proposée dans une future mise à jour."),
+            ("Correct ressource.cfg", "La correction du fichier resource.cfg n'est pas encore implémentée."),
+        ]
+
+        for label, message in button_definitions:
+            button = QtWidgets.QPushButton(label, dialog)
+            button.clicked.connect(partial(self._show_placeholder_message, label, message))
+            layout.addWidget(button)
+
+        close_button = QtWidgets.QPushButton("Fermer", dialog)
+        close_button.clicked.connect(dialog.accept)
+        layout.addWidget(close_button)
+
+        dialog.exec_()
+
+    def _show_placeholder_message(self, title, message):
+        QtWidgets.QMessageBox.information(self, title, message)
+
     def populate_table(self, data_rows):
+        self.all_data_rows = list(data_rows)
+        self._apply_search_filter()
+
+    def apply_search_filter(self, _text=None):
+        self._apply_search_filter()
+
+    def _apply_search_filter(self):
+        query = ""
+        if hasattr(self, "search_edit"):
+            query = self.search_edit.text().strip().lower()
+
+        if not query:
+            filtered_rows = list(self.all_data_rows)
+        else:
+            filtered_rows = [
+                row
+                for row in self.all_data_rows
+                if self._row_matches_query(row, query)
+            ]
+
+        self._render_table(filtered_rows)
+
+    def _row_matches_query(self, row, query):
+        for value in self._gather_searchable_values(row):
+            if query in value:
+                return True
+        return False
+
+    def _gather_searchable_values(self, row):
+        values = [
+            str(row.get("status", "")),
+            str(row.get("package", "")),
+            str(row.get("package_date", "")),
+            str(row.get("script", "")),
+            str(row.get("script_date", "")),
+            str(row.get("version", "")),
+        ]
+        ignored_value = "oui" if row.get("ignored", False) else "non"
+        values.append(ignored_value)
+        values.extend(str(candidate) for candidate in row.get("ignore_candidates", []))
+        values.extend(str(path) for path in row.get("paths", []))
+        return [value.lower() for value in values if value]
+
+    def _render_table(self, rows):
         header = self.table.horizontalHeader()
         sorting_enabled = self.table.isSortingEnabled()
         sort_section = header.sortIndicatorSection()
         sort_order = header.sortIndicatorOrder()
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)  # Clear previous data
-        for row in data_rows:
+        for row in rows:
             row_position = self.table.rowCount()
             self.table.insertRow(row_position)
             columns = [
