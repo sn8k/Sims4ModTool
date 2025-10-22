@@ -25,8 +25,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.33"
-APP_VERSION_DATE = "22/10/2025 12:47 UTC"
+APP_VERSION = "v3.34"
+APP_VERSION_DATE = "22/10/2025 13:05 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -817,6 +817,7 @@ def build_mod_rows(
     version_releases,
     package_dates,
     script_dates,
+    roots=None,
 ):
     version_filters_enabled = settings.get("enable_version_filters", True)
     start_version = settings.get("version_filter_start") or ""
@@ -841,10 +842,28 @@ def build_mod_rows(
     show_packages = settings.get("show_package_mods", True)
     show_scripts = settings.get("show_ts4script_mods", True)
 
+    normalized_roots = [
+        os.path.normcase(os.path.abspath(root))
+        for root in (roots or [])
+        if root
+    ]
+
     def _resolve_parent(path):
         if not path:
             return ""
         return os.path.normcase(os.path.abspath(os.path.dirname(path)))
+
+    def _relative_parent_display(parent_path: str) -> str:
+        if not parent_path:
+            return "."
+        for root in normalized_roots:
+            try:
+                rel_parent = os.path.relpath(parent_path, root)
+            except ValueError:
+                continue
+            if rel_parent == "." or not rel_parent.startswith(".."):
+                return rel_parent
+        return parent_path
 
     package_entries = {}
     for pkg, pkg_path in package_files.items():
@@ -919,10 +938,7 @@ def build_mod_rows(
         script_name = next((candidate for candidate in candidates if candidate in unpaired_scripts), None)
         if not script_name:
             continue
-        try:
-            rel_parent = os.path.relpath(parent, directory) if parent else "."
-        except ValueError:
-            rel_parent = parent
+        rel_parent = _relative_parent_display(parent)
         if rel_parent in (".", ""):
             folder_display = "(racine du dossier mods)"
         else:
@@ -1280,6 +1296,7 @@ class ScanWorker(QtCore.QObject):
             self.version_releases,
             package_dates,
             script_dates,
+            roots=self.roots,
         )
         self.rows_total = len(rows)
 
@@ -2840,7 +2857,8 @@ class ModManagerApp(QtWidgets.QWidget):
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        self.table.setUniformRowHeights(True)
+        if hasattr(self.table, "setUniformRowHeights"):
+            self.table.setUniformRowHeights(True)
         self.table.setWordWrap(False)
         self.table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
         header = self.table.horizontalHeader()
