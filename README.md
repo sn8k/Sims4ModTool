@@ -1,8 +1,8 @@
 # Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.32
-- **Dernière mise à jour :** 22/10/2025 16:46 UTC
+- **Version de l'application :** v3.33
+- **Dernière mise à jour :** 22/10/2025 17:02 UTC
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
@@ -15,6 +15,7 @@
 - Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement et possibilité d'exclure certains fichiers par nom.
 - Lancement direct de `TS4_X64.exe` avec arguments optionnels.
 - Installation de mods par glisser-déposer via la fenêtre **Mod Installer**, avec journalisation des installations, mise à jour dédiée, ajout et suppression d'add-ons.
+- Journalisation complète des actions avec niveau de log configurable depuis le menu **Configuration**.
 
 ## Prérequis
 - Python 3.9 ou supérieur.
@@ -47,6 +48,7 @@ Ouvrez la fenêtre **Configuration** pour définir :
 - Le chemin complet vers `TS4_X64.exe` ainsi que les arguments additionnels éventuels.
 - Les extensions supplémentaires de journaux à inclure lors de l'extraction (en plus de `.log` et `.txt`).
 - Les fichiers de logs à ignorer lors de la collecte.
+- Le niveau de log par défaut de l'application (DEBUG, INFO, WARNING, ERROR ou CRITICAL).
 - Les versions de patch disponibles pour le filtrage (affichage de la liste et ajout via le bouton **Add update info**).
 
 Les paramètres sont enregistrés dans `settings.json` dès la sauvegarde de la fenêtre.

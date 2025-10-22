@@ -9,6 +9,7 @@ import webbrowser
 import zipfile
 import stat
 import hashlib
+import logging
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set, Tuple
@@ -22,8 +23,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.32"
-APP_VERSION_DATE = "22/10/2025 16:46 UTC"
+APP_VERSION = "v3.33"
+APP_VERSION_DATE = "22/10/2025 17:02 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -59,6 +60,53 @@ MAX_RELATIVE_DEPTH = 2
 MOD_NAME_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 MIN_SIMILARITY_RATIO = 0.6
 MAX_SIMILARITY_CANDIDATES = 80
+
+LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+LOG_LEVEL_CHOICES = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+DEFAULT_LOG_LEVEL = "DEBUG"
+
+LOGGER = logging.getLogger("sims4modtool")
+
+
+def normalize_log_level(level_name):
+    if level_name is None:
+        return DEFAULT_LOG_LEVEL
+    normalized = str(level_name).strip().upper()
+    if not normalized:
+        return DEFAULT_LOG_LEVEL
+    if normalized in LOG_LEVEL_CHOICES:
+        return normalized
+    try:
+        numeric_level = int(normalized)
+    except (TypeError, ValueError):
+        return DEFAULT_LOG_LEVEL
+    for name in LOG_LEVEL_CHOICES:
+        if getattr(logging, name, None) == numeric_level:
+            return name
+    return DEFAULT_LOG_LEVEL
+
+
+def configure_logging(level_name):
+    normalized = normalize_log_level(level_name)
+    level_value = getattr(logging, normalized, logging.DEBUG)
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        root_logger.addHandler(handler)
+    else:
+        for handler in root_logger.handlers:
+            if handler.formatter is None:
+                handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    root_logger.setLevel(level_value)
+    for handler in root_logger.handlers:
+        handler.setLevel(level_value)
+    LOGGER.setLevel(level_value)
+    LOGGER.log(level_value, "Niveau de log actif : %s", normalized)
+    return normalized
+
+
+configure_logging(DEFAULT_LOG_LEVEL)
 
 
 @dataclass(frozen=True)
@@ -728,6 +776,8 @@ def load_settings(path=SETTINGS_PATH):
     for key, value in defaults.items():
         settings.setdefault(key, value)
 
+    settings["log_level"] = normalize_log_level(settings.get("log_level"))
+
     show_search_pref = settings.get("show_search_results")
     if isinstance(show_search_pref, str):
         normalized = show_search_pref.strip().lower()
@@ -779,17 +829,20 @@ def load_settings(path=SETTINGS_PATH):
         ignored_from_file = settings.get("ignored_mods", [])
         save_ignore_list(ignored_from_file)
     settings["ignored_mods"] = ignored_from_file
+    LOGGER.debug("Paramètres chargés depuis %s (log_level=%s)", path, settings["log_level"])
     return settings
 
 def save_settings(settings, path=SETTINGS_PATH):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=4, ensure_ascii=False)
+    LOGGER.debug("Paramètres sauvegardés dans %s (log_level=%s)", path, settings.get("log_level"))
 
 def scan_directory(directory, progress_callback=None):
     package_files = {}
     ts4script_files = {}
     snapshot_entries = []
     normalized_root = os.path.abspath(directory)
+    LOGGER.info("Début du scan du dossier : %s", normalized_root)
 
     def _emit_progress(processed, total, current_path):
         if progress_callback is None:
@@ -844,7 +897,8 @@ def scan_directory(directory, progress_callback=None):
 
                     processed_files += 1
                     _emit_progress(processed_files, total_files, full_path)
-        except (FileNotFoundError, NotADirectoryError, PermissionError):
+        except (FileNotFoundError, NotADirectoryError, PermissionError) as exc:
+            LOGGER.warning("Accès impossible au dossier %s : %s", current_dir, exc)
             continue
 
     snapshot_entries.sort(key=lambda item: item["path"].casefold())
@@ -854,6 +908,12 @@ def scan_directory(directory, progress_callback=None):
         "entries": snapshot_entries,
     }
     _emit_progress(processed_files, total_files, "")
+    LOGGER.info(
+        "Scan terminé : %d fichier(s) traité(s), %d package(s), %d ts4script(s)",
+        processed_files,
+        len(package_files),
+        len(ts4script_files),
+    )
     return package_files, ts4script_files, snapshot
 
 
@@ -880,10 +940,18 @@ def similarity_confidence_label(ratio):
     return "Faible"
 
 def generate_data_rows(directory, settings, version_releases, progress_callback=None, yield_callback=None):
+    LOGGER.debug("Génération des lignes de données pour %s", directory)
     package_files, ts4script_files, snapshot = scan_directory(directory, progress_callback=progress_callback)
     previous_snapshot = load_mod_scan_cache()
     snapshot_changed = previous_snapshot is not None and not mod_scan_snapshots_equal(previous_snapshot, snapshot)
     save_mod_scan_cache(snapshot)
+    if snapshot_changed:
+        LOGGER.info("Modification détectée entre les scans pour %s", directory)
+    LOGGER.debug(
+        "Inventaire du scan : %d package(s), %d ts4script(s)",
+        len(package_files),
+        len(ts4script_files),
+    )
     version_filters_enabled = settings.get("enable_version_filters", True)
     start_version = settings.get("version_filter_start") or ""
     end_version = settings.get("version_filter_end") or ""
@@ -1332,6 +1400,18 @@ class ConfigurationDialog(QtWidgets.QDialog):
         logs_ext_layout.addWidget(self.log_extensions_edit)
         layout.addLayout(logs_ext_layout)
 
+        self.log_level_combo = QtWidgets.QComboBox(self)
+        self.log_level_combo.addItems(LOG_LEVEL_CHOICES)
+        current_level = normalize_log_level(settings.get("log_level"))
+        index = self.log_level_combo.findText(current_level, QtCore.Qt.MatchFixedString)
+        if index >= 0:
+            self.log_level_combo.setCurrentIndex(index)
+
+        log_level_layout = QtWidgets.QHBoxLayout()
+        log_level_layout.addWidget(QtWidgets.QLabel("Niveau de log :"))
+        log_level_layout.addWidget(self.log_level_combo)
+        layout.addLayout(log_level_layout)
+
         self.grab_logs_ignore_edit = QtWidgets.QPlainTextEdit(self)
         self.grab_logs_ignore_edit.setPlaceholderText("last_crash.txt\nExceptionLog.txt")
         ignore_lines = "\n".join(settings.get("grab_logs_ignore_files", []))
@@ -1411,6 +1491,7 @@ class ConfigurationDialog(QtWidgets.QDialog):
         sims_executable_arguments = self.sims_arguments_edit.text().strip()
         log_extensions_text = self.log_extensions_edit.text().strip()
         ignore_text = self.grab_logs_ignore_edit.toPlainText()
+        log_level = normalize_log_level(self.log_level_combo.currentText())
 
         extra_extensions = []
         if log_extensions_text:
@@ -1444,6 +1525,7 @@ class ConfigurationDialog(QtWidgets.QDialog):
                 sims_executable_arguments,
                 sorted(set(extra_extensions)),
                 ignore_files,
+                log_level,
             )
         self.accept()
 
@@ -2406,6 +2488,7 @@ class ModManagerApp(QtWidgets.QWidget):
         self.setGeometry(100, 100, 800, 600)
 
         self.settings = load_settings()
+        configure_logging(self.settings.get("log_level"))
         self.custom_version_releases = load_custom_version_releases()
         self.version_releases = merge_version_releases(self.custom_version_releases)
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
@@ -2778,8 +2861,9 @@ class ModManagerApp(QtWidgets.QWidget):
             if not self._cache_clear_triggered_this_refresh:
                 self.clear_sims4_cache()
 
-    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files):
+    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files, log_level):
         previous_mod_directory = self.settings.get("mod_directory", "")
+        previous_log_level = self.settings.get("log_level", DEFAULT_LOG_LEVEL)
         self.settings["mod_directory"] = mod_directory
         self.settings["sims_cache_directory"] = cache_directory
         self.settings["backups_directory"] = backups_directory
@@ -2787,7 +2871,16 @@ class ModManagerApp(QtWidgets.QWidget):
         self.settings["sims_executable_arguments"] = sims_executable_arguments
         self.settings["log_extra_extensions"] = sorted(set(log_extra_extensions))
         self.settings["grab_logs_ignore_files"] = list(grab_logs_ignore_files)
+        normalized_level = normalize_log_level(log_level)
+        self.settings["log_level"] = normalized_level
         save_settings(self.settings)
+        if previous_log_level != normalized_level:
+            configure_logging(normalized_level)
+            LOGGER.log(
+                getattr(logging, normalized_level, logging.INFO),
+                "Niveau de log mis à jour : %s",
+                normalized_level,
+            )
         self.update_mod_directory_label()
         self.update_launch_button_state()
 
@@ -2795,12 +2888,19 @@ class ModManagerApp(QtWidgets.QWidget):
             self.last_scanned_directory = ""
             if hasattr(self, "table"):
                 self.table.setRowCount(0)
+        LOGGER.debug(
+            "Configuration appliquée (mods=%s, cache=%s, backups=%s)",
+            mod_directory,
+            cache_directory,
+            backups_directory,
+        )
 
     def refresh_tree(self):
         folder = self.settings.get("mod_directory", "")
         if not folder or not os.path.isdir(folder):
             QtWidgets.QMessageBox.critical(self, "Erreur", "Sélectionne un dossier valide dans la configuration.")
             return
+        LOGGER.info("Début d'analyse complète du dossier de mods : %s", folder)
         self.settings["mod_directory"] = folder
         save_settings(self.settings)
         self.update_mod_directory_label()
@@ -2824,6 +2924,7 @@ class ModManagerApp(QtWidgets.QWidget):
         if scan_changed:
             self._cache_clear_triggered_this_refresh = True
             self.clear_sims4_cache()
+        LOGGER.info("Analyse terminée : %d ligne(s) chargée(s)", len(rows))
 
     def refresh_table_only(self):
         if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
@@ -2832,6 +2933,7 @@ class ModManagerApp(QtWidgets.QWidget):
             self._cache_clear_triggered_this_refresh = False
             self._start_scan_progress()
             try:
+                LOGGER.debug("Rafraîchissement rapide des données pour %s", self.last_scanned_directory)
                 rows, scan_changed = generate_data_rows(
                     self.last_scanned_directory,
                     self.settings,
@@ -2846,13 +2948,16 @@ class ModManagerApp(QtWidgets.QWidget):
             if scan_changed:
                 self._cache_clear_triggered_this_refresh = True
                 self.clear_sims4_cache()
+            LOGGER.debug("Rafraîchissement terminé : %d ligne(s) mises à jour", len(rows))
 
     def clear_sims4_cache(self):
         cache_directory = self.settings.get("sims_cache_directory", "")
         if not cache_directory or not os.path.isdir(cache_directory):
             QtWidgets.QMessageBox.warning(self, "Dossier cache invalide", "Configure un dossier cache Sims 4 valide dans la configuration.")
+            LOGGER.warning("Tentative de nettoyage du cache avec un dossier invalide : %s", cache_directory)
             return
 
+        LOGGER.info("Nettoyage du cache Sims 4 dans %s", cache_directory)
         targets = [
             "localthumbcache.package",
             "localsimtexturecache.package",
@@ -2890,6 +2995,12 @@ class ModManagerApp(QtWidgets.QWidget):
         if not messages:
             messages.append("Aucun fichier ou dossier à supprimer.")
 
+        LOGGER.debug(
+            "Cache Sims 4 nettoyé (supprimé=%s, absent=%s, erreurs=%s)",
+            removed,
+            missing,
+            errors,
+        )
         QtWidgets.QMessageBox.information(self, "Nettoyage du cache", "\n".join(messages))
 
         launch_response = QtWidgets.QMessageBox.question(
@@ -2906,11 +3017,13 @@ class ModManagerApp(QtWidgets.QWidget):
         mod_directory = self.settings.get("mod_directory", "")
         if not mod_directory or not os.path.isdir(mod_directory):
             QtWidgets.QMessageBox.warning(self, "Dossier des mods invalide", "Définis un dossier des mods valide dans la configuration avant d'extraire les logs.")
+            LOGGER.warning("Extraction des logs impossible : dossier de mods invalide (%s)", mod_directory)
             return
 
         backups_directory = self.settings.get("backups_directory", "")
         if not backups_directory:
             QtWidgets.QMessageBox.warning(self, "Dossier backups manquant", "Définis un dossier de backups dans la configuration avant d'extraire les logs.")
+            LOGGER.warning("Extraction des logs impossible : dossier de sauvegarde non défini")
             return
 
         os.makedirs(backups_directory, exist_ok=True)
@@ -2922,6 +3035,7 @@ class ModManagerApp(QtWidgets.QWidget):
         normalized_mod_dir = os.path.normpath(mod_directory)
         backups_directory_norm = os.path.normpath(backups_directory)
         found_logs = []
+        LOGGER.info("Recherche de logs dans %s", normalized_mod_dir)
 
         for current_root, dirs, files in os.walk(normalized_mod_dir):
             dirs[:] = [d for d in dirs if os.path.normpath(os.path.join(current_root, d)) != backups_directory_norm]
@@ -2941,6 +3055,7 @@ class ModManagerApp(QtWidgets.QWidget):
 
         if not found_logs:
             QtWidgets.QMessageBox.information(self, "Aucun log", "Aucun fichier de log correspondant n'a été trouvé.")
+            LOGGER.info("Aucun fichier de log trouvé pour %s", normalized_mod_dir)
             return
 
         timestamp = datetime.now().strftime("Logs_%Y%m%d_%H%M%S")
@@ -2949,6 +3064,7 @@ class ModManagerApp(QtWidgets.QWidget):
 
         moved_files = []
         errors = []
+        LOGGER.debug("Déplacement de %d log(s) vers %s", len(found_logs), destination_root)
         for source_path in found_logs:
             relative_path = os.path.relpath(source_path, normalized_mod_dir)
             destination_path = os.path.join(destination_root, relative_path)
@@ -2977,15 +3093,23 @@ class ModManagerApp(QtWidgets.QWidget):
             message_lines.append("\nErreurs:\n" + "\n".join(errors))
         QtWidgets.QMessageBox.information(self, "Logs sauvegardés", "\n".join(message_lines))
         self._open_in_file_manager(destination_root)
+        LOGGER.info(
+            "Logs déplacés : %d succès, %d erreur(s). Dossier : %s",
+            len(moved_files),
+            len(errors),
+            destination_root,
+        )
 
     def launch_sims4(self):
         executable_path = self.settings.get("sims_executable_path", "")
         if not executable_path:
             QtWidgets.QMessageBox.warning(self, "Exécutable manquant", "Configure le chemin de TS4_X64.exe dans la configuration.")
+            LOGGER.warning("Lancement du jeu impossible : chemin exécutable non défini")
             return
 
         if not os.path.isfile(executable_path):
             QtWidgets.QMessageBox.critical(self, "Exécutable introuvable", "Le fichier TS4_X64.exe configuré est introuvable.")
+            LOGGER.error("Lancement du jeu impossible : fichier introuvable (%s)", executable_path)
             return
 
         args_text = self.settings.get("sims_executable_arguments", "").strip()
@@ -2993,9 +3117,11 @@ class ModManagerApp(QtWidgets.QWidget):
             args = shlex.split(args_text, posix=not sys.platform.startswith("win")) if args_text else []
         except ValueError as exc:
             QtWidgets.QMessageBox.warning(self, "Arguments invalides", f"Les arguments spécifiés sont invalides : {exc}")
+            LOGGER.error("Arguments de lancement invalides : %s", exc)
             return
 
         try:
+            LOGGER.info("Lancement de Sims 4 : %s %s", executable_path, " ".join(args))
             if sys.platform == "darwin":
                 started = QtCore.QProcess.startDetached(executable_path, args)
             elif sys.platform.startswith("win"):
@@ -3006,6 +3132,7 @@ class ModManagerApp(QtWidgets.QWidget):
                 raise OSError("le processus n'a pas pu être démarré")
         except OSError as exc:
             QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible de lancer Sims 4 : {exc}")
+            LOGGER.exception("Erreur lors du lancement de Sims 4")
 
     def kill_sims4(self):
         process_name = "TS4_x64.exe"
@@ -3017,9 +3144,11 @@ class ModManagerApp(QtWidgets.QWidget):
             missing_command_message = "La commande pkill est introuvable."
 
         try:
+            LOGGER.info("Tentative d'arrêt du processus Sims 4 (%s)", process_name)
             completed = subprocess.run(command, capture_output=True, text=True)
         except FileNotFoundError:
             QtWidgets.QMessageBox.critical(self, "Commande introuvable", missing_command_message)
+            LOGGER.error("Commande système introuvable pour arrêter Sims 4 : %s", command[0])
             return
 
         if completed.returncode == 0:
@@ -3028,6 +3157,7 @@ class ModManagerApp(QtWidgets.QWidget):
                 "Sims 4 arrêté",
                 "Le processus TS4_x64.exe a été arrêté avec succès.",
             )
+            LOGGER.info("Processus Sims 4 arrêté avec succès")
             return
 
         output = completed.stderr.strip() or completed.stdout.strip() or "La commande a échoué."
@@ -3036,6 +3166,7 @@ class ModManagerApp(QtWidgets.QWidget):
             "Aucun processus arrêté",
             f"Impossible d'arrêter TS4_x64.exe : {output}",
         )
+        LOGGER.warning("Échec lors de l'arrêt de Sims 4 : %s", output)
 
     def update_launch_button_state(self):
         if hasattr(self, "launch_button"):
