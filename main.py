@@ -20,8 +20,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.28"
-APP_VERSION_DATE = "22/10/2025 11:05 UTC"
+APP_VERSION = "v3.29"
+APP_VERSION_DATE = "22/10/2025 11:18 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -825,7 +825,7 @@ def scan_directory(directory, progress_callback=None):
     }
     return package_files, ts4script_files, snapshot
 
-def generate_data_rows(directory, settings, version_releases, progress_callback=None):
+def generate_data_rows(directory, settings, version_releases, progress_callback=None, yield_callback=None):
     package_files, ts4script_files, snapshot = scan_directory(directory, progress_callback=progress_callback)
     previous_snapshot = load_mod_scan_cache()
     snapshot_changed = previous_snapshot is not None and not mod_scan_snapshots_equal(previous_snapshot, snapshot)
@@ -844,6 +844,19 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
         start_limit, end_limit = end_limit, start_limit
 
     data_rows = []
+    throttle_counter = 0
+
+    def _maybe_yield():
+        nonlocal throttle_counter
+        if yield_callback is None:
+            return
+        throttle_counter += 1
+        if throttle_counter % 25 != 0:
+            return
+        try:
+            yield_callback()
+        except Exception:
+            pass
     ignored_mods = set(settings.get("ignored_mods", []))
     show_ignored = settings.get("show_ignored", False)
     show_packages = settings.get("show_package_mods", True)
@@ -886,8 +899,9 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
             "version": version,
             "ignored": ignored,
             "ignore_candidates": candidates or [pkg],
-            "paths": [path for path in (pkg_path, script_path) if path]
+            "paths": [path for path in (pkg_path, script_path) if path],
         })
+        _maybe_yield()
 
     # ts4script orphans
     for script, script_path in ts4script_files.items():
@@ -921,8 +935,15 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
             "version": version,
             "ignored": ignored,
             "ignore_candidates": candidates,
-            "paths": [script_path]
+            "paths": [script_path],
         })
+        _maybe_yield()
+
+    if yield_callback is not None:
+        try:
+            yield_callback()
+        except Exception:
+            pass
 
     return data_rows, snapshot_changed
 
@@ -2142,6 +2163,17 @@ class ModManagerApp(QtWidgets.QWidget):
             if mod_directory and os.path.isdir(mod_directory):
                 QtCore.QTimer.singleShot(0, self.refresh_tree)
 
+    def _yield_ui_events(self, max_time_ms=25):
+        try:
+            flags_type = QtCore.QEventLoop.ProcessEventsFlag
+            flags = flags_type.ExcludeUserInputEvents | flags_type.ExcludeSocketNotifiers
+        except AttributeError:
+            flags = QtCore.QEventLoop.ExcludeUserInputEvents | QtCore.QEventLoop.ExcludeSocketNotifiers
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        app.processEvents(flags, max_time_ms)
+
     def init_ui(self):
         # Layout
         layout = QtWidgets.QVBoxLayout()
@@ -2320,7 +2352,7 @@ class ModManagerApp(QtWidgets.QWidget):
         if hasattr(self, "scan_status_label") and self.scan_status_label is not None:
             self.scan_status_label.setText(message)
             self.scan_status_label.setVisible(bool(message))
-            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.AllEvents, 50)
+            self._yield_ui_events()
 
     def _start_scan_progress(self):
         if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
@@ -2330,12 +2362,14 @@ class ModManagerApp(QtWidgets.QWidget):
         if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
             self.scan_count_label.setText("")
             self.scan_count_label.setVisible(True)
+        self._yield_ui_events()
 
     def _finish_scan_progress(self):
         if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
             self.scan_progress_bar.setVisible(False)
         if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
             self.scan_count_label.setVisible(False)
+        self._yield_ui_events()
 
     def _handle_scan_progress(self, processed, total, current_path):
         if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
@@ -2351,7 +2385,7 @@ class ModManagerApp(QtWidgets.QWidget):
             else:
                 self.scan_count_label.setText(f"Objets scannés : {processed}")
             self.scan_count_label.setVisible(True)
-        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.AllEvents, 50)
+        self._yield_ui_events()
 
     def populate_version_combos(self):
         if not hasattr(self, "version_start_combo"):
@@ -2491,6 +2525,7 @@ class ModManagerApp(QtWidgets.QWidget):
                 self.settings,
                 self.version_releases,
                 progress_callback=self._handle_scan_progress,
+                yield_callback=self._yield_ui_events,
             )
         finally:
             self._finish_scan_progress()
@@ -2513,6 +2548,7 @@ class ModManagerApp(QtWidgets.QWidget):
                     self.settings,
                     self.version_releases,
                     progress_callback=self._handle_scan_progress,
+                    yield_callback=self._yield_ui_events,
                 )
             finally:
                 self._finish_scan_progress()
@@ -2829,9 +2865,12 @@ class ModManagerApp(QtWidgets.QWidget):
             ignore_checkbox.setChecked(ignored)
             ignore_checkbox.blockSignals(False)
             self.table.setCellWidget(row_position, 6, ignore_checkbox)
+            if row_position % 25 == 0:
+                self._yield_ui_events()
         self.table.setSortingEnabled(sorting_enabled)
         if sorting_enabled:
             self.table.sortByColumn(sort_section, sort_order)
+        self._yield_ui_events()
 
     def show_context_menu(self, position):
         index = self.table.indexAt(position)
