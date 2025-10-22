@@ -20,8 +20,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.25"
-APP_VERSION_DATE = "22/10/2025 10:19 UTC"
+APP_VERSION = "v3.26"
+APP_VERSION_DATE = "22/10/2025 10:36 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 
 SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
@@ -1486,6 +1486,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
         menu = QtWidgets.QMenu(self)
         search_action = menu.addAction("Recherche Google")
         menu.addSeparator()
+        open_action = menu.addAction("Ouvrir dans l'explorateur")
         addons_action = menu.addAction("Ajouter add-ons")
         remove_addons_action = menu.addAction("Supprimer add-ons")
         remove_addons_action.setEnabled(bool(entry.get("addons")))
@@ -1497,6 +1498,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
             return
         if chosen_action == search_action:
             self._open_google_search(entry)
+        elif chosen_action == open_action:
+            self._open_in_file_manager(entry.get("target_folder"))
         elif chosen_action == addons_action:
             self._prompt_addons(entry)
         elif chosen_action == remove_addons_action:
@@ -1505,6 +1508,34 @@ class ModInstallerDialog(QtWidgets.QDialog):
             self._delete_mod(entry)
         elif chosen_action == update_action:
             self._prompt_update_mod(entry)
+
+    def _open_in_file_manager(self, target_path):
+        if not target_path:
+            return
+        if not os.path.exists(target_path):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Dossier introuvable",
+                "Le dossier du mod est introuvable. Vérifiez qu'il n'a pas été supprimé.",
+            )
+            return
+
+        if os.path.isfile(target_path):
+            target_path = os.path.dirname(target_path) or target_path
+
+        if sys.platform.startswith("win"):
+            try:
+                os.startfile(target_path)
+            except OSError:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Erreur",
+                    "Impossible d'ouvrir l'explorateur de fichiers.",
+                )
+        elif sys.platform == "darwin":
+            QtCore.QProcess.startDetached("open", [target_path])
+        else:
+            QtCore.QProcess.startDetached("xdg-open", [target_path])
 
     def _open_google_search(self, entry):
         mod_name = entry.get("name") or os.path.basename(entry.get("target_folder", ""))
@@ -2150,6 +2181,7 @@ class ModManagerApp(QtWidgets.QWidget):
         dialog.exec_()
         if dialog.installations_performed:
             self.refresh_tree()
+            self.clear_sims4_cache()
 
     def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files):
         previous_mod_directory = self.settings.get("mod_directory", "")
@@ -2236,6 +2268,16 @@ class ModManagerApp(QtWidgets.QWidget):
             messages.append("Aucun fichier ou dossier à supprimer.")
 
         QtWidgets.QMessageBox.information(self, "Nettoyage du cache", "\n".join(messages))
+
+        launch_response = QtWidgets.QMessageBox.question(
+            self,
+            "Lancer Les Sims 4",
+            "Souhaitez-vous lancer Les Sims 4 maintenant ?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if launch_response == QtWidgets.QMessageBox.Yes:
+            self.launch_sims4()
 
     def grab_logs(self):
         mod_directory = self.settings.get("mod_directory", "")
