@@ -14,14 +14,14 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 from functools import partial
 from urllib.parse import quote_plus
 from PyQt5 import QtWidgets, QtCore, QtGui
-from datetime import datetime, time
+from datetime import datetime, time, date
 from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.27"
-APP_VERSION_DATE = "22/10/2025 10:52 UTC"
+APP_VERSION = "v3.28"
+APP_VERSION_DATE = "22/10/2025 11:05 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -716,9 +716,17 @@ def load_settings(path=SETTINGS_PATH):
         "grab_logs_ignore_files": [],
         "ignored_mods": [],
         "show_ignored": False,
+        "show_search_results": True,
     }
     for key, value in defaults.items():
         settings.setdefault(key, value)
+
+    show_search_pref = settings.get("show_search_results")
+    if isinstance(show_search_pref, str):
+        normalized = show_search_pref.strip().lower()
+        settings["show_search_results"] = normalized not in {"false", "0", "non", "no", "off"}
+    else:
+        settings["show_search_results"] = bool(show_search_pref)
     legacy_combined_filter = settings.pop("filter_package_and_ts4script", None)
     if legacy_combined_filter is True:
         settings["show_package_mods"] = True
@@ -768,32 +776,47 @@ def save_settings(settings, path=SETTINGS_PATH):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=4, ensure_ascii=False)
 
-def scan_directory(directory):
+def scan_directory(directory, progress_callback=None):
     package_files = {}
     ts4script_files = {}
     snapshot_entries = []
     normalized_root = os.path.abspath(directory)
+    relevant_files = []
     for root, dirs, files in os.walk(directory):
         for file in files:
             lower_name = file.lower()
-            full_path = os.path.join(root, file)
-            if lower_name.endswith(".package"):
-                package_files[file] = full_path
-            elif lower_name.endswith(".ts4script"):
-                ts4script_files[file] = full_path
-            else:
-                continue
+            if lower_name.endswith((".package", ".ts4script")):
+                full_path = os.path.join(root, file)
+                relevant_files.append((file, lower_name, full_path))
+
+    total_files = len(relevant_files)
+    if progress_callback is not None:
+        try:
+            progress_callback(0, total_files, "")
+        except Exception:
+            pass
+
+    for index, (file, lower_name, full_path) in enumerate(relevant_files, start=1):
+        if lower_name.endswith(".package"):
+            package_files[file] = full_path
+        else:
+            ts4script_files[file] = full_path
+        try:
+            stat_result = os.stat(full_path)
+        except OSError:
+            continue
+        relative_path = os.path.relpath(full_path, normalized_root)
+        snapshot_entries.append({
+            "path": relative_path.replace("\\", "/"),
+            "mtime": int(stat_result.st_mtime),
+            "size": int(stat_result.st_size),
+            "type": "package" if lower_name.endswith(".package") else "ts4script",
+        })
+        if progress_callback is not None:
             try:
-                stat_result = os.stat(full_path)
-            except OSError:
-                continue
-            relative_path = os.path.relpath(full_path, normalized_root)
-            snapshot_entries.append({
-                "path": relative_path.replace("\\", "/"),
-                "mtime": int(stat_result.st_mtime),
-                "size": int(stat_result.st_size),
-                "type": "package" if lower_name.endswith(".package") else "ts4script",
-            })
+                progress_callback(index, total_files, full_path)
+            except Exception:
+                pass
     snapshot_entries.sort(key=lambda item: item["path"].casefold())
     snapshot = {
         "root": normalized_root.replace("\\", "/"),
@@ -802,8 +825,8 @@ def scan_directory(directory):
     }
     return package_files, ts4script_files, snapshot
 
-def generate_data_rows(directory, settings, version_releases):
-    package_files, ts4script_files, snapshot = scan_directory(directory)
+def generate_data_rows(directory, settings, version_releases, progress_callback=None):
+    package_files, ts4script_files, snapshot = scan_directory(directory, progress_callback=progress_callback)
     previous_snapshot = load_mod_scan_cache()
     snapshot_changed = previous_snapshot is not None and not mod_scan_snapshots_equal(previous_snapshot, snapshot)
     save_mod_scan_cache(snapshot)
@@ -812,7 +835,11 @@ def generate_data_rows(directory, settings, version_releases):
     start_date = version_releases.get(start_version)
     end_date = version_releases.get(end_version)
     start_limit = datetime.combine(start_date, time.min) if start_date else None
-    end_limit = datetime.combine(end_date, time.max) if end_date else None
+    latest_version_key = next(reversed(version_releases)) if version_releases else None
+    if end_version and latest_version_key and end_version == latest_version_key:
+        end_limit = datetime.combine(date.today(), time.max)
+    else:
+        end_limit = datetime.combine(end_date, time.max) if end_date else None
     if start_limit and end_limit and start_limit > end_limit:
         start_limit, end_limit = end_limit, start_limit
 
@@ -2191,11 +2218,29 @@ class ModManagerApp(QtWidgets.QWidget):
         self.search_edit.textChanged.connect(self.apply_search_filter)
         search_layout.addWidget(self.search_edit)
 
+        self.show_search_checkbox = QtWidgets.QCheckBox("Afficher recherche", self)
+        self.show_search_checkbox.setChecked(self.settings.get("show_search_results", True))
+        self.show_search_checkbox.toggled.connect(self.toggle_show_search_results)
+        search_layout.addWidget(self.show_search_checkbox)
+
+        self.search_edit.setEnabled(self.show_search_checkbox.isChecked())
+
         layout.addLayout(search_layout)
 
+        progress_layout = QtWidgets.QHBoxLayout()
         self.scan_status_label = QtWidgets.QLabel("", self)
         self.scan_status_label.setVisible(False)
-        layout.addWidget(self.scan_status_label)
+        self.scan_progress_bar = QtWidgets.QProgressBar(self)
+        self.scan_progress_bar.setVisible(False)
+        self.scan_progress_bar.setMinimum(0)
+        self.scan_progress_bar.setMaximum(1)
+        self.scan_progress_bar.setValue(0)
+        self.scan_count_label = QtWidgets.QLabel("", self)
+        self.scan_count_label.setVisible(False)
+        progress_layout.addWidget(self.scan_status_label)
+        progress_layout.addWidget(self.scan_progress_bar, stretch=1)
+        progress_layout.addWidget(self.scan_count_label)
+        layout.addLayout(progress_layout)
 
         # Table des mods
         self.table = QtWidgets.QTableWidget(self)
@@ -2277,6 +2322,37 @@ class ModManagerApp(QtWidgets.QWidget):
             self.scan_status_label.setVisible(bool(message))
             QtWidgets.QApplication.processEvents(QtCore.QEventLoop.AllEvents, 50)
 
+    def _start_scan_progress(self):
+        if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
+            self.scan_progress_bar.setVisible(True)
+            self.scan_progress_bar.setMaximum(0)
+            self.scan_progress_bar.setValue(0)
+        if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
+            self.scan_count_label.setText("")
+            self.scan_count_label.setVisible(True)
+
+    def _finish_scan_progress(self):
+        if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
+            self.scan_progress_bar.setVisible(False)
+        if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
+            self.scan_count_label.setVisible(False)
+
+    def _handle_scan_progress(self, processed, total, current_path):
+        if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
+            if total:
+                if self.scan_progress_bar.maximum() != total:
+                    self.scan_progress_bar.setMaximum(total)
+                self.scan_progress_bar.setValue(min(processed, total))
+            else:
+                self.scan_progress_bar.setMaximum(0)
+        if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
+            if total:
+                self.scan_count_label.setText(f"Objets scannés : {processed}/{total}")
+            else:
+                self.scan_count_label.setText(f"Objets scannés : {processed}")
+            self.scan_count_label.setVisible(True)
+        QtWidgets.QApplication.processEvents(QtCore.QEventLoop.AllEvents, 50)
+
     def populate_version_combos(self):
         if not hasattr(self, "version_start_combo"):
             return
@@ -2355,6 +2431,13 @@ class ModManagerApp(QtWidgets.QWidget):
         save_settings(self.settings)
         self.refresh_table_only()
 
+    def toggle_show_search_results(self):
+        checked = self.show_search_checkbox.isChecked()
+        self.settings["show_search_results"] = checked
+        save_settings(self.settings)
+        self.search_edit.setEnabled(checked)
+        self._apply_search_filter()
+
     def update_mod_directory_label(self):
         directory = self.settings.get("mod_directory", "")
         display_text = directory if directory else "(non défini)"
@@ -2401,7 +2484,16 @@ class ModManagerApp(QtWidgets.QWidget):
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = folder
         self._update_scan_status("Scan en cours...")
-        rows, scan_changed = generate_data_rows(folder, self.settings, self.version_releases)
+        self._start_scan_progress()
+        try:
+            rows, scan_changed = generate_data_rows(
+                folder,
+                self.settings,
+                self.version_releases,
+                progress_callback=self._handle_scan_progress,
+            )
+        finally:
+            self._finish_scan_progress()
         self.populate_table(rows)
         self._update_scan_status("")
         self._cache_clear_triggered_this_refresh = False
@@ -2414,7 +2506,16 @@ class ModManagerApp(QtWidgets.QWidget):
             self.ignored_mods = set(self.settings.get("ignored_mods", []))
             self._update_scan_status("Scan en cours...")
             self._cache_clear_triggered_this_refresh = False
-            rows, scan_changed = generate_data_rows(self.last_scanned_directory, self.settings, self.version_releases)
+            self._start_scan_progress()
+            try:
+                rows, scan_changed = generate_data_rows(
+                    self.last_scanned_directory,
+                    self.settings,
+                    self.version_releases,
+                    progress_callback=self._handle_scan_progress,
+                )
+            finally:
+                self._finish_scan_progress()
             self.populate_table(rows)
             self._update_scan_status("")
             if scan_changed:
@@ -2655,7 +2756,11 @@ class ModManagerApp(QtWidgets.QWidget):
         if hasattr(self, "search_edit"):
             query = self.search_edit.text().strip().lower()
 
-        if not query:
+        show_search_results = self.settings.get("show_search_results", True)
+
+        if not show_search_results:
+            filtered_rows = list(self.all_data_rows)
+        elif not query:
             filtered_rows = list(self.all_data_rows)
         else:
             filtered_rows = [
