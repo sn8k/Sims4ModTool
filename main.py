@@ -25,8 +25,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.34"
-APP_VERSION_DATE = "22/10/2025 13:05 UTC"
+APP_VERSION = "v3.35"
+APP_VERSION_DATE = "22/10/2025 13:20 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -3656,7 +3656,7 @@ class ModManagerApp(QtWidgets.QWidget):
             self._update_scan_status("")
             if snapshot_changed:
                 self._cache_clear_triggered_this_refresh = True
-                self.clear_sims4_cache()
+                QtCore.QTimer.singleShot(0, self.clear_sims4_cache)
             else:
                 self._cache_clear_triggered_this_refresh = False
             if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
