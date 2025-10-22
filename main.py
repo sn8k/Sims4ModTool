@@ -15,7 +15,6 @@ import logging
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, MutableMapping, Optional, Sequence, Set, Tuple
-from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from functools import partial
 from urllib.parse import quote_plus
@@ -26,8 +25,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.36"
-APP_VERSION_DATE = "22/10/2025 13:43 UTC"
+APP_VERSION = "v3.37"
+APP_VERSION_DATE = "22/10/2025 14:12 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -1215,21 +1214,10 @@ class ScanWorker(QtCore.QObject):
         self.logger.debug("Estimation de %d fichier(s) à traiter", total_files)
         self.progress.emit(0)
 
-        cache_entries = {}
-        cache_entries_list = self.cache.get("entries") if isinstance(self.cache, dict) else None
-        if isinstance(cache_entries_list, list):
-            for entry in cache_entries_list:
-                if not isinstance(entry, dict):
-                    continue
-                key = str(entry.get("path") or "").strip()
-                if key:
-                    cache_entries[key] = entry
-
         package_files: Dict[str, str] = {}
         ts4script_files: Dict[str, str] = {}
         snapshot_entries = []
         file_stats: Dict[str, os.stat_result] = {}
-        unchanged_paths: Set[str] = set()
         processed_files = 0
 
         for root in self.roots:
@@ -1250,12 +1238,6 @@ class ScanWorker(QtCore.QObject):
                     continue
                 extension = os.path.splitext(entry.name)[1].lower()
                 relative_path = os.path.relpath(full_path, root).replace("\\", "/")
-                cache_entry = cache_entries.get(relative_path)
-                if cache_entry:
-                    cached_mtime = int(cache_entry.get("mtime", 0))
-                    cached_size = int(cache_entry.get("size", 0))
-                    if int(stat_result.st_mtime) == cached_mtime and int(stat_result.st_size) == cached_size:
-                        unchanged_paths.add(full_path)
                 if extension not in {".package", ".ts4script", ".zip"}:
                     continue
                 entry_type = (
@@ -1298,39 +1280,20 @@ class ScanWorker(QtCore.QObject):
         package_dates: Dict[str, Optional[datetime]] = {}
         script_dates: Dict[str, Optional[datetime]] = {}
 
-        def _schedule_dates(paths, target):
-            changed = []
-            for path in paths:
-                if path in unchanged_paths and path in file_stats:
-                    stat_result = file_stats[path]
-                    target[path] = datetime.fromtimestamp(stat_result.st_mtime)
-                else:
-                    changed.append(path)
-            if not changed:
-                return None, []
-            executor = ThreadPoolExecutor(max_workers=12)
-            futures = [executor.submit(get_file_date, path) for path in changed]
-            return executor, list(zip(futures, changed))
-
-        package_executor, package_tasks = _schedule_dates(package_files.values(), package_dates)
-        script_executor, script_tasks = _schedule_dates(ts4script_files.values(), script_dates)
-
-        for future, path in package_tasks:
+        def _resolve_timestamp(path: str) -> Optional[datetime]:
+            stat_result = file_stats.get(path)
+            if stat_result is not None:
+                return datetime.fromtimestamp(stat_result.st_mtime)
             try:
-                package_dates[path] = future.result()
+                return get_file_date(path)
             except Exception:
-                package_dates[path] = None
+                return None
 
-        for future, path in script_tasks:
-            try:
-                script_dates[path] = future.result()
-            except Exception:
-                script_dates[path] = None
+        for pkg_path in package_files.values():
+            package_dates[pkg_path] = _resolve_timestamp(pkg_path)
 
-        if package_executor is not None:
-            package_executor.shutdown(wait=True)
-        if script_executor is not None:
-            script_executor.shutdown(wait=True)
+        for script_path in ts4script_files.values():
+            script_dates[script_path] = _resolve_timestamp(script_path)
 
         rows = build_mod_rows(
             package_files,
