@@ -20,8 +20,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.29"
-APP_VERSION_DATE = "22/10/2025 11:18 UTC"
+APP_VERSION = "v3.30"
+APP_VERSION_DATE = "22/10/2025 11:32 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -704,6 +704,7 @@ def load_settings(path=SETTINGS_PATH):
     defaults = {
         "version_filter_start": "",
         "version_filter_end": "",
+        "enable_version_filters": True,
         "show_package_mods": True,
         "show_ts4script_mods": True,
         "mod_directory": "",
@@ -727,6 +728,8 @@ def load_settings(path=SETTINGS_PATH):
         settings["show_search_results"] = normalized not in {"false", "0", "non", "no", "off"}
     else:
         settings["show_search_results"] = bool(show_search_pref)
+
+    settings["enable_version_filters"] = bool(settings.get("enable_version_filters", True))
     legacy_combined_filter = settings.pop("filter_package_and_ts4script", None)
     if legacy_combined_filter is True:
         settings["show_package_mods"] = True
@@ -830,8 +833,12 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
     previous_snapshot = load_mod_scan_cache()
     snapshot_changed = previous_snapshot is not None and not mod_scan_snapshots_equal(previous_snapshot, snapshot)
     save_mod_scan_cache(snapshot)
+    version_filters_enabled = settings.get("enable_version_filters", True)
     start_version = settings.get("version_filter_start") or ""
     end_version = settings.get("version_filter_end") or ""
+    if not version_filters_enabled:
+        start_version = ""
+        end_version = ""
     start_date = version_releases.get(start_version)
     end_date = version_releases.get(end_version)
     start_limit = datetime.combine(start_date, time.min) if start_date else None
@@ -2210,11 +2217,18 @@ class ModManagerApp(QtWidgets.QWidget):
 
         # Filtrage
         version_range_layout = QtWidgets.QHBoxLayout()
-        version_range_layout.addWidget(QtWidgets.QLabel("Version de départ :", self))
+        self.version_filters_checkbox = QtWidgets.QCheckBox("Versions", self)
+        self.version_filters_checkbox.setChecked(self.settings.get("enable_version_filters", True))
+        self.version_filters_checkbox.toggled.connect(self._on_version_filters_toggled)
+        version_range_layout.addWidget(self.version_filters_checkbox)
+
+        self.version_start_label = QtWidgets.QLabel("Version de départ :", self)
+        version_range_layout.addWidget(self.version_start_label)
         self.version_start_combo = QtWidgets.QComboBox(self)
         self.version_start_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
         version_range_layout.addWidget(self.version_start_combo)
-        version_range_layout.addWidget(QtWidgets.QLabel("Version d'arrivée :", self))
+        self.version_end_label = QtWidgets.QLabel("Version d'arrivée :", self)
+        version_range_layout.addWidget(self.version_end_label)
         self.version_end_combo = QtWidgets.QComboBox(self)
         self.version_end_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
         version_range_layout.addWidget(self.version_end_combo)
@@ -2242,18 +2256,18 @@ class ModManagerApp(QtWidgets.QWidget):
         self.populate_version_combos()
         self.version_start_combo.currentIndexChanged.connect(self.on_version_filter_changed)
         self.version_end_combo.currentIndexChanged.connect(self.on_version_filter_changed)
+        self._update_version_filter_visibility()
 
         search_layout = QtWidgets.QHBoxLayout()
-        search_layout.addWidget(QtWidgets.QLabel("Recherche mod :"))
         self.search_edit = QtWidgets.QLineEdit(self)
         self.search_edit.setPlaceholderText("Nom du mod à rechercher")
         self.search_edit.textChanged.connect(self.apply_search_filter)
-        search_layout.addWidget(self.search_edit)
-
         self.show_search_checkbox = QtWidgets.QCheckBox("Afficher recherche", self)
         self.show_search_checkbox.setChecked(self.settings.get("show_search_results", True))
         self.show_search_checkbox.toggled.connect(self.toggle_show_search_results)
         search_layout.addWidget(self.show_search_checkbox)
+        search_layout.addWidget(QtWidgets.QLabel("Recherche mod :"))
+        search_layout.addWidget(self.search_edit)
 
         self.search_edit.setEnabled(self.show_search_checkbox.isChecked())
 
@@ -2405,6 +2419,30 @@ class ModManagerApp(QtWidgets.QWidget):
             index = combo.findData(current_value)
             combo.setCurrentIndex(index if index != -1 else 0)
             combo.blockSignals(False)
+
+    def _on_version_filters_toggled(self, checked):
+        self.settings["enable_version_filters"] = bool(checked)
+        save_settings(self.settings)
+        self._update_version_filter_visibility()
+        self.refresh_table_only()
+
+    def _update_version_filter_visibility(self):
+        enabled = bool(self.settings.get("enable_version_filters", True))
+        if hasattr(self, "version_filters_checkbox"):
+            if self.version_filters_checkbox.isChecked() != enabled:
+                self.version_filters_checkbox.blockSignals(True)
+                self.version_filters_checkbox.setChecked(enabled)
+                self.version_filters_checkbox.blockSignals(False)
+        widgets = [
+            getattr(self, "version_start_label", None),
+            getattr(self, "version_start_combo", None),
+            getattr(self, "version_end_label", None),
+            getattr(self, "version_end_combo", None),
+        ]
+        for widget in widgets:
+            if widget is not None:
+                widget.setVisible(enabled)
+                widget.setEnabled(enabled)
 
     def on_version_filter_changed(self):
         if not hasattr(self, "version_start_combo"):
@@ -2833,43 +2871,53 @@ class ModManagerApp(QtWidgets.QWidget):
         sorting_enabled = self.table.isSortingEnabled()
         sort_section = header.sortIndicatorSection()
         sort_order = header.sortIndicatorOrder()
-        self.table.setSortingEnabled(False)
-        self.table.setRowCount(0)  # Clear previous data
-        for row in rows:
-            row_position = self.table.rowCount()
-            self.table.insertRow(row_position)
-            columns = [
-                row.get("status", ""),
-                row.get("package", ""),
-                row.get("package_date", ""),
-                row.get("script", ""),
-                row.get("script_date", ""),
-                row.get("version", ""),
-            ]
-            for col_idx, value in enumerate(columns):
-                item = QtWidgets.QTableWidgetItem(str(value))
-                if col_idx == 0:
-                    item.setData(QtCore.Qt.UserRole, row.get("ignore_candidates", []))
-                    item.setData(QtCore.Qt.UserRole + 1, row.get("paths", []))
-                self.table.setItem(row_position, col_idx, item)
+        table = self.table
+        table.setSortingEnabled(False)
+        table.setUpdatesEnabled(False)
+        try:
+            if table.rowCount():
+                table.clearContents()
+            table.setRowCount(len(rows))
+            for row_index, row in enumerate(rows):
+                columns = [
+                    row.get("status", ""),
+                    row.get("package", ""),
+                    row.get("package_date", ""),
+                    row.get("script", ""),
+                    row.get("script_date", ""),
+                    row.get("version", ""),
+                ]
+                for col_idx, value in enumerate(columns):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    if col_idx == 0:
+                        item.setData(QtCore.Qt.UserRole, tuple(row.get("ignore_candidates") or []))
+                        item.setData(QtCore.Qt.UserRole + 1, tuple(row.get("paths") or []))
+                    table.setItem(row_index, col_idx, item)
 
-            # Ajouter la case à cocher dans la colonne "Ignoré"
-            ignored = row.get("ignored", False)
-            ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
-            ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
-            ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-            self.table.setItem(row_position, 6, ignore_item)
-            ignore_checkbox = QtWidgets.QCheckBox()
-            ignore_checkbox.stateChanged.connect(partial(self.update_ignore_mod, row.get("ignore_candidates", [])))
-            ignore_checkbox.blockSignals(True)
-            ignore_checkbox.setChecked(ignored)
-            ignore_checkbox.blockSignals(False)
-            self.table.setCellWidget(row_position, 6, ignore_checkbox)
-            if row_position % 25 == 0:
-                self._yield_ui_events()
-        self.table.setSortingEnabled(sorting_enabled)
-        if sorting_enabled:
-            self.table.sortByColumn(sort_section, sort_order)
+                ignored = row.get("ignored", False)
+                ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
+                ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
+                ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+                table.setItem(row_index, 6, ignore_item)
+
+                ignore_checkbox = QtWidgets.QCheckBox()
+                ignore_checkbox.stateChanged.connect(
+                    partial(self.update_ignore_mod, tuple(row.get("ignore_candidates") or []))
+                )
+                ignore_checkbox.blockSignals(True)
+                ignore_checkbox.setChecked(ignored)
+                ignore_checkbox.blockSignals(False)
+                table.setCellWidget(row_index, 6, ignore_checkbox)
+
+                if row_index % 50 == 0:
+                    self._yield_ui_events()
+        finally:
+            table.setUpdatesEnabled(True)
+
+        table.setSortingEnabled(sorting_enabled)
+        if sorting_enabled and rows:
+            table.sortByColumn(sort_section, sort_order)
+        table.viewport().update()
         self._yield_ui_events()
 
     def show_context_menu(self, position):
