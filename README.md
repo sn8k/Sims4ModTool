@@ -93,3 +93,50 @@ Le fichier Excel généré contient l'intégralité des colonnes visibles, y com
 
 ## Licence
 Ce projet est fourni tel quel pour un usage personnel. Adaptez-le selon vos besoins.
+# Sims 4 Mod Manager (Sims4ModTool)
+
+Recent updates:
+
+- Mod Installer
+  - Writes a per‑mod marker file `.s4mt_mod_marker.json` on install/update/add‑ons.
+  - Recovery list: scans Mods folder to rebuild installed list from markers.
+  - ZIP extraction now preserves internal folders and filenames, keeping original timestamps.
+  - Added support for `.7z` and `.rar` extraction using 7‑Zip if available.
+
+- GUI
+  - New Group View dialog (tree) to collapse/expand rows by mod group.
+  - Table highlights rows installed via Mod Installer (green background, white text).
+  - Search: added “Instant search” toggle and manual “Rechercher” button.
+  - File filter dropdown: Show both / Show Package / Show TS4Script / Mod Installer Only.
+  - Auto-scan on startup: configurable in settings (enabled by default). When enabled, the app scans the Mods folder at launch.
+  - Startup splash screen with status updates during initial scan.
+  - Configuration dialog reorganized and enlarged for easier navigation.
+  - Deleting mods is disabled while TS4_x64.exe is running (safety guard).
+  - Kill Sims 4 attempts elevation on Windows when required (UAC prompt), with clear status.
+  - Tools: “Correct resource.cfg” checks and fixes Mods\Resource.cfg to recommended defaults.
+  - Column visibility: right‑click the table header to show/hide columns; preferences are saved and restored.
+  - Top bar: Filters group (left) and Actions group (right) for quicker access to filters and actions.
+
+- Duplicate Finder
+  - Recursively scans subfolders; supports advanced mode by filename + size.
+  - Progress bar and multi‑select delete.
+
+- Logging
+  - Central logging (console + `sims4modtool.log`) with configurable level in settings.
+
+Requirements for 7z/rar:
+
+- Install 7‑Zip and ensure `7z` is in PATH (or installed under `C:\Program Files\7-Zip\7z.exe`).
+
+Notes:
+
+- Grouping relies on Mod Installer tracking of installed files, so files added outside the installer won’t be grouped unless a marker exists.
+- Tools
+  - Added placeholders: "Symlink Mods" and "Backup Mods" in Tools dialog.
+
+Build
+
+- Use the provided PowerShell script to build an executable with PyInstaller:
+  - `powershell -ExecutionPolicy Bypass -File .\build.ps1`
+  - Options: `-OneFile`, `-NoConsole`, `-Name <AppName>`, `-Icon <path.ico>`
+  - Requires Python and PyInstaller. The script installs PyInstaller if missing.

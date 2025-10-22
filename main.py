@@ -9,15 +9,115 @@ import webbrowser
 import zipfile
 import stat
 import hashlib
+import logging
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 from difflib import SequenceMatcher
 from functools import partial
 from urllib.parse import quote_plus
-from PyQt5 import QtWidgets, QtCore, QtGui
 from datetime import datetime, time, date
 from openpyxl import Workbook
+
+# Qt bindings import shim (supports PyQt5/PySide2/PySide6/PyQt6)
+try:
+    from PyQt5 import QtWidgets, QtCore, QtGui  # type: ignore
+    QT_LIB = "PyQt5"
+except Exception:
+    try:
+        from PySide2 import QtWidgets, QtCore, QtGui  # type: ignore
+        QT_LIB = "PySide2"
+    except Exception:
+        try:
+            from PySide6 import QtWidgets, QtCore, QtGui  # type: ignore
+            QT_LIB = "PySide6"
+        except Exception:
+            from PyQt6 import QtWidgets, QtCore, QtGui  # type: ignore
+            QT_LIB = "PyQt6"
+
+# Compatibility shims for Qt6 enum/API differences used in this codebase
+if 'QT_LIB' in globals() and QT_LIB in ("PyQt6", "PySide6"):
+    # QDialogButtonBox: map StandardButton members to direct attributes (Ok, Cancel, ...)
+    if hasattr(QtWidgets.QDialogButtonBox, "StandardButton"):
+        _STD = QtWidgets.QDialogButtonBox.StandardButton
+        for _name in ("Ok", "Cancel", "Yes", "No", "Apply", "Save", "Open", "Close"):
+            if not hasattr(QtWidgets.QDialogButtonBox, _name) and hasattr(_STD, _name):
+                setattr(QtWidgets.QDialogButtonBox, _name, getattr(_STD, _name))
+
+    # QtCore.Qt enum aliases commonly used by PyQt5-era code
+    if hasattr(QtCore, "Qt"):
+        _Qt = QtCore.Qt
+        # Alignment flags
+        if hasattr(_Qt, "AlignmentFlag"):
+            if not hasattr(_Qt, "AlignRight"):
+                _Qt.AlignRight = _Qt.AlignmentFlag.AlignRight
+            if not hasattr(_Qt, "AlignCenter"):
+                _Qt.AlignCenter = _Qt.AlignmentFlag.AlignCenter
+        # Text interaction
+        if hasattr(_Qt, "TextInteractionFlag") and not hasattr(_Qt, "TextSelectableByMouse"):
+            _Qt.TextSelectableByMouse = _Qt.TextInteractionFlag.TextSelectableByMouse
+        # Context menu policy
+        if hasattr(_Qt, "ContextMenuPolicy") and not hasattr(_Qt, "CustomContextMenu"):
+            _Qt.CustomContextMenu = _Qt.ContextMenuPolicy.CustomContextMenu
+        # Orientation
+        if hasattr(_Qt, "Orientation") and not hasattr(_Qt, "Horizontal"):
+            _Qt.Horizontal = _Qt.Orientation.Horizontal
+        # Check state
+        if hasattr(_Qt, "CheckState") and not hasattr(_Qt, "Checked"):
+            _Qt.Checked = _Qt.CheckState.Checked
+        # Item flags
+        if hasattr(_Qt, "ItemFlag"):
+            if not hasattr(_Qt, "ItemIsEditable"):
+                _Qt.ItemIsEditable = _Qt.ItemFlag.ItemIsEditable
+            if not hasattr(_Qt, "ItemIsEnabled"):
+                _Qt.ItemIsEnabled = _Qt.ItemFlag.ItemIsEnabled
+            if not hasattr(_Qt, "ItemIsSelectable"):
+                _Qt.ItemIsSelectable = _Qt.ItemFlag.ItemIsSelectable
+        # Item data roles
+        if hasattr(_Qt, "ItemDataRole") and not hasattr(_Qt, "UserRole"):
+            _Qt.UserRole = _Qt.ItemDataRole.UserRole
+    # Widgets enum aliasing
+    try:
+        if hasattr(QtWidgets, "QAbstractItemView") and hasattr(QtWidgets.QAbstractItemView, "SelectionMode"):
+            if not hasattr(QtWidgets.QAbstractItemView, "NoSelection"):
+                QtWidgets.QAbstractItemView.NoSelection = QtWidgets.QAbstractItemView.SelectionMode.NoSelection
+    except Exception:
+        pass
+    try:
+        if hasattr(QtWidgets, "QComboBox") and hasattr(QtWidgets.QComboBox, "SizeAdjustPolicy"):
+            if not hasattr(QtWidgets.QComboBox, "AdjustToContents"):
+                QtWidgets.QComboBox.AdjustToContents = QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents
+    except Exception:
+        pass
+    try:
+        if hasattr(QtWidgets, "QHeaderView") and hasattr(QtWidgets.QHeaderView, "ResizeMode"):
+            if not hasattr(QtWidgets.QHeaderView, "Stretch"):
+                QtWidgets.QHeaderView.Stretch = QtWidgets.QHeaderView.ResizeMode.Stretch
+            if not hasattr(QtWidgets.QHeaderView, "ResizeToContents"):
+                QtWidgets.QHeaderView.ResizeToContents = QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+    except Exception:
+        pass
+    # exec_ compatibility for Qt6
+    try:
+        for _cls in (
+            getattr(QtWidgets, "QDialog", None),
+            getattr(QtWidgets, "QApplication", None),
+            getattr(QtWidgets, "QMenu", None),
+        ):
+            if _cls is not None and hasattr(_cls, "exec") and not hasattr(_cls, "exec_"):
+                setattr(_cls, "exec_", getattr(_cls, "exec"))
+    except Exception:
+        pass
+    # QDialog.DialogCode aliases
+    try:
+        if hasattr(QtWidgets, "QDialog") and hasattr(QtWidgets.QDialog, "DialogCode"):
+            _DC = QtWidgets.QDialog.DialogCode
+            if not hasattr(QtWidgets.QDialog, "Accepted"):
+                QtWidgets.QDialog.Accepted = _DC.Accepted
+            if not hasattr(QtWidgets.QDialog, "Rejected"):
+                QtWidgets.QDialog.Rejected = _DC.Rejected
+    except Exception:
+        pass
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
@@ -26,8 +126,62 @@ APP_VERSION = "v3.31"
 APP_VERSION_DATE = "22/10/2025 11:54 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
+MOD_MARKER_FILENAME = ".s4mt_mod_marker.json"
+LOG_FILE_PATH = "sims4modtool.log"
 
-SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
+# --- Logging setup (default DEBUG, configurable via settings) ---
+_LEVEL_MAP = {
+    "CRITICAL": logging.CRITICAL,
+    "ERROR": logging.ERROR,
+    "WARNING": logging.WARNING,
+    "INFO": logging.INFO,
+    "DEBUG": logging.DEBUG,
+}
+
+def _normalize_log_level(value):
+    if isinstance(value, int):
+        return value
+    try:
+        key = str(value or "").strip().upper()
+    except Exception:
+        key = "DEBUG"
+    return _LEVEL_MAP.get(key, logging.DEBUG)
+
+def setup_logging(level="DEBUG"):
+    level_no = _normalize_log_level(level)
+    logger = logging.getLogger("Sims4ModTool")
+    logger.setLevel(level_no)
+    logger.propagate = False
+
+    # Ensure handlers only added once
+    if not logger.handlers:
+        formatter = logging.Formatter(
+            fmt="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        )
+        # Console handler
+        ch = logging.StreamHandler()
+        ch.setLevel(level_no)
+        ch.setFormatter(formatter)
+        logger.addHandler(ch)
+        try:
+            # File handler (best-effort)
+            fh = logging.FileHandler(LOG_FILE_PATH, encoding="utf-8")
+            fh.setLevel(level_no)
+            fh.setFormatter(formatter)
+            logger.addHandler(fh)
+        except Exception:
+            # If file logging fails, continue with console only
+            pass
+
+    # Also set root logger to the same level for libraries if needed
+    logging.getLogger().setLevel(level_no)
+    return logger
+
+# Initialize logging early with default DEBUG; runtime settings can override later
+setup_logging("DEBUG")
+
+SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip", ".7z", ".rar"}
 
 IGNORED_ARCHIVE_PREFIXES = {"__MACOSX"}
 IGNORED_ARCHIVE_PREFIX_MATCHES = (".git",)
@@ -305,6 +459,11 @@ def load_installed_mods(path=INSTALLED_MODS_PATH):
             "target_folder": target_folder,
             "source": str(entry.get("source") or "").strip(),
             "addons": normalize_addon_metadata(entry.get("addons", [])),
+            "files": [str(p).replace("\\", "/").strip() for p in (entry.get("files", []) or []) if str(p).strip()],
+            "mod_version": str(entry.get("mod_version") or "").strip(),
+            "url": str(entry.get("url") or "").strip(),
+            "disabled": bool(entry.get("disabled", False)),
+            "disabled_path": str(entry.get("disabled_path") or "").strip(),
         })
 
     normalized_entries.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
@@ -724,6 +883,12 @@ def load_settings(path=SETTINGS_PATH):
         "ignored_mods": [],
         "show_ignored": False,
         "show_search_results": True,
+        "instant_search": True,
+        "file_filter_mode": "both",
+        "auto_scan_on_start": True,
+        "hidden_columns": [],
+        "show_disabled_only": False,
+        "log_level": "DEBUG",
     }
     for key, value in defaults.items():
         settings.setdefault(key, value)
@@ -779,13 +944,22 @@ def load_settings(path=SETTINGS_PATH):
         ignored_from_file = settings.get("ignored_mods", [])
         save_ignore_list(ignored_from_file)
     settings["ignored_mods"] = ignored_from_file
+    try:
+        logging.getLogger("Sims4ModTool").debug("Settings loaded from %s", path)
+    except Exception:
+        pass
     return settings
 
 def save_settings(settings, path=SETTINGS_PATH):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=4, ensure_ascii=False)
+    try:
+        logging.getLogger("Sims4ModTool").debug("Settings saved to %s", path)
+    except Exception:
+        pass
 
 def scan_directory(directory, progress_callback=None):
+    logging.getLogger("Sims4ModTool").debug("Scanning directory: %s", directory)
     package_files = {}
     ts4script_files = {}
     snapshot_entries = []
@@ -832,6 +1006,7 @@ def scan_directory(directory, progress_callback=None):
         "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
         "entries": snapshot_entries,
     }
+    logging.getLogger("Sims4ModTool").debug("Scan complete. Found %d relevant files", len(relevant_files))
     return package_files, ts4script_files, snapshot
 
 
@@ -859,6 +1034,39 @@ def similarity_confidence_label(ratio):
 
 def generate_data_rows(directory, settings, version_releases, progress_callback=None, yield_callback=None):
     package_files, ts4script_files, snapshot = scan_directory(directory, progress_callback=progress_callback)
+    # Build path->mod group mapping from installed_mods.json if available
+    group_by_path = {}
+    disabled_by_path = {}
+    try:
+        installed = load_installed_mods()
+    except Exception:
+        installed = []
+    for entry in installed:
+        target_folder = entry.get("target_folder") or ""
+        name = entry.get("name") or os.path.basename(target_folder) or ""
+        if not target_folder:
+            continue
+        root = os.path.normcase(os.path.abspath(target_folder))
+        # direct files list
+        disabled_flag = bool(entry.get("disabled", False))
+        for rel in (entry.get("files") or []):
+            rel_norm = str(rel).replace("\\", "/").strip().lstrip("/")
+            if not rel_norm:
+                continue
+            abs_path = os.path.join(root, *rel_norm.split("/"))
+            key = os.path.normcase(os.path.abspath(abs_path))
+            group_by_path[key] = name
+            disabled_by_path[key] = disabled_flag
+        # addons paths
+        for addon in (entry.get("addons") or []):
+            for rel in (addon.get("paths") or []):
+                rel_norm = str(rel).replace("\\", "/").strip().lstrip("/")
+                if not rel_norm:
+                    continue
+                abs_path = os.path.join(root, *rel_norm.split("/"))
+                key = os.path.normcase(os.path.abspath(abs_path))
+                group_by_path[key] = name
+                disabled_by_path[key] = disabled_flag
     previous_snapshot = load_mod_scan_cache()
     snapshot_changed = previous_snapshot is not None and not mod_scan_snapshots_equal(previous_snapshot, snapshot)
     save_mod_scan_cache(snapshot)
@@ -895,8 +1103,12 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
             pass
     ignored_mods = set(settings.get("ignored_mods", []))
     show_ignored = settings.get("show_ignored", False)
-    show_packages = settings.get("show_package_mods", True)
-    show_scripts = settings.get("show_ts4script_mods", True)
+    # derive file filter mode
+    mode = (settings.get("file_filter_mode") or "both").strip().lower()
+    if mode not in {"both", "package", "ts4script", "installer_only"}:
+        mode = "both"
+    show_packages = mode in {"both", "package", "installer_only"}
+    show_scripts = mode in {"both", "ts4script", "installer_only"}
 
     def _resolve_parent(path):
         if not path:
@@ -1122,8 +1334,25 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
         confidence_value = match_info["confidence"] if match_info else "—"
         confidence_tooltip = match_info["tooltip"] if match_info else "Aucun appariement détecté."
 
+        # Resolve group and disabled via tracked paths
+        group_value = ""
+        disabled_value = False
+        for p in (pkg_path, script_path):
+            if not p:
+                continue
+            key = os.path.normcase(os.path.abspath(p))
+            if not group_value:
+                group_value = group_by_path.get(key, "")
+            if not disabled_value:
+                disabled_value = bool(disabled_by_path.get(key, False))
+
+        if mode == "installer_only" and not group_value:
+            _maybe_yield()
+            continue
         data_rows.append({
             "status": status,
+            "group": group_value,
+            "disabled": disabled_value,
             "package": pkg,
             "package_date": format_datetime(pkg_date),
             "script": script_name if script_path else "",
@@ -1158,8 +1387,19 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
         status = "MP"
         version = estimate_version_from_dates(None, script_date, version_releases)
 
+        group_value = ""
+        key = os.path.normcase(os.path.abspath(script_path)) if script_path else None
+        disabled_value = False
+        if key:
+            group_value = group_by_path.get(key, "")
+            disabled_value = bool(disabled_by_path.get(key, False))
+        if mode == "installer_only" and not group_value:
+            _maybe_yield()
+            continue
         data_rows.append({
             "status": status,
+            "group": group_value,
+            "disabled": disabled_value,
             "package": "",
             "package_date": "",
             "script": script_name,
@@ -1243,9 +1483,17 @@ class ConfigurationDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.setWindowTitle("Configuration")
         self.setModal(True)
+        self.resize(780, 680)
         self._parent = parent
 
         layout = QtWidgets.QVBoxLayout()
+
+        # Section: Chemins
+        section_paths = QtWidgets.QLabel("Chemins")
+        f = section_paths.font()
+        f.setBold(True)
+        section_paths.setFont(f)
+        layout.addWidget(section_paths)
 
         self.mod_directory_edit = QtWidgets.QLineEdit(self)
         self.mod_directory_edit.setText(settings.get("mod_directory", ""))
@@ -1280,6 +1528,11 @@ class ConfigurationDialog(QtWidgets.QDialog):
         backups_dir_layout.addWidget(backups_dir_browse)
         layout.addLayout(backups_dir_layout)
 
+        layout.addSpacing(6)
+        section_exec = QtWidgets.QLabel("Sims 4")
+        section_exec.setFont(f)
+        layout.addWidget(section_exec)
+
         self.sims_executable_edit = QtWidgets.QLineEdit(self)
         self.sims_executable_edit.setText(settings.get("sims_executable_path", ""))
         sims_exec_browse = QtWidgets.QPushButton("Parcourir...")
@@ -1299,6 +1552,11 @@ class ConfigurationDialog(QtWidgets.QDialog):
         sims_args_layout.addWidget(QtWidgets.QLabel("Arguments TS4_X64.exe :"))
         sims_args_layout.addWidget(self.sims_arguments_edit)
         layout.addLayout(sims_args_layout)
+
+        layout.addSpacing(6)
+        section_logs = QtWidgets.QLabel("Logs")
+        section_logs.setFont(f)
+        layout.addWidget(section_logs)
 
         self.log_extensions_edit = QtWidgets.QLineEdit(self)
         extra_extensions = ", ".join(settings.get("log_extra_extensions", []))
@@ -1320,6 +1578,23 @@ class ConfigurationDialog(QtWidgets.QDialog):
         ignore_layout.addWidget(QtWidgets.QLabel("Fichiers de logs à ignorer (un par ligne ou séparés par des virgules) :"))
         ignore_layout.addWidget(self.grab_logs_ignore_edit)
         layout.addLayout(ignore_layout)
+
+        # Niveau de logs
+        self.log_level_combo = QtWidgets.QComboBox(self)
+        self.log_level_combo.addItems(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
+        current_level = str(settings.get("log_level", "DEBUG")).upper()
+        idx = self.log_level_combo.findText(current_level)
+        self.log_level_combo.setCurrentIndex(idx if idx != -1 else 0)
+
+        log_level_layout = QtWidgets.QHBoxLayout()
+        log_level_layout.addWidget(QtWidgets.QLabel("Niveau de logs :"))
+        log_level_layout.addWidget(self.log_level_combo)
+        layout.addLayout(log_level_layout)
+
+        # Options de démarrage
+        self.auto_scan_checkbox = QtWidgets.QCheckBox("Scan automatique au démarrage", self)
+        self.auto_scan_checkbox.setChecked(bool(settings.get("auto_scan_on_start", True)))
+        layout.addWidget(self.auto_scan_checkbox)
 
         version_group = QtWidgets.QGroupBox("Gestion des versions de patch", self)
         version_layout = QtWidgets.QVBoxLayout(version_group)
@@ -1389,6 +1664,8 @@ class ConfigurationDialog(QtWidgets.QDialog):
         sims_executable_arguments = self.sims_arguments_edit.text().strip()
         log_extensions_text = self.log_extensions_edit.text().strip()
         ignore_text = self.grab_logs_ignore_edit.toPlainText()
+        log_level_value = self.log_level_combo.currentText().strip().upper()
+        auto_scan_on_start = bool(self.auto_scan_checkbox.isChecked())
 
         extra_extensions = []
         if log_extensions_text:
@@ -1422,6 +1699,8 @@ class ConfigurationDialog(QtWidgets.QDialog):
                 sims_executable_arguments,
                 sorted(set(extra_extensions)),
                 ignore_files,
+                log_level_value,
+                auto_scan_on_start,
             )
         self.accept()
 
@@ -1544,13 +1823,16 @@ class ModInstallerDialog(QtWidgets.QDialog):
         layout.addWidget(self.drop_label)
 
         self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(5)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "Mod",
             "Type",
             "Installé le",
+            "Version",
+            "URL",
             "Dossier",
             "Addons",
+            "Statut",
         ])
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
@@ -1561,9 +1843,16 @@ class ModInstallerDialog(QtWidgets.QDialog):
         self.table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.table, stretch=1)
 
+        footer_layout = QtWidgets.QHBoxLayout()
+        self.recovery_button = QtWidgets.QPushButton("Recovery list", self)
+        self.recovery_button.clicked.connect(self._recover_from_markers)
+        footer_layout.addWidget(self.recovery_button)
+
+        footer_layout.addStretch(1)
         close_button = QtWidgets.QPushButton("Fermer", self)
         close_button.clicked.connect(self.accept)
-        layout.addWidget(close_button, alignment=QtCore.Qt.AlignRight)
+        footer_layout.addWidget(close_button)
+        layout.addLayout(footer_layout)
 
         self.refresh_table()
 
@@ -1736,7 +2025,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
                     parent_directories.append(parent_dir)
             success_messages = []
             for parent_dir in parent_directories:
-                success, install_message, _ = self._install_file_to_target(
+                success, install_message, installed_paths = self._install_file_to_target(
                     file_path,
                     parent_dir,
                     clean_before=False,
@@ -1748,18 +2037,21 @@ class ModInstallerDialog(QtWidgets.QDialog):
                     return False, install_message
                 success_messages.append(install_message)
                 installed_at = datetime.utcnow().replace(microsecond=0).isoformat()
-                self._record_installation({
+                entry = {
                     "name": display_name,
                     "type": self._describe_install_type([file_path]),
                     "installed_at": installed_at,
                     "target_folder": parent_dir,
                     "source": os.path.basename(file_path),
                     "addons": [],
-                })
+                    "files": list(installed_paths or []),
+                }
+                self._record_installation(entry)
+                self._write_marker_file(parent_dir, entry)
             self.installations_performed = True
             return True, "\n".join(success_messages)
 
-        success, install_message, _ = self._install_file_to_target(
+        success, install_message, installed_paths = self._install_file_to_target(
             file_path,
             target_folder,
             clean_before=replace_existing,
@@ -1770,14 +2062,17 @@ class ModInstallerDialog(QtWidgets.QDialog):
             return False, install_message
 
         installed_at = datetime.utcnow().replace(microsecond=0).isoformat()
-        self._record_installation({
+        entry = {
             "name": display_name,
             "type": self._describe_install_type([file_path]),
             "installed_at": installed_at,
             "target_folder": target_folder,
             "source": os.path.basename(file_path),
             "addons": [],
-        })
+            "files": list(installed_paths or []),
+        }
+        self._record_installation(entry)
+        self._write_marker_file(target_folder, entry)
 
         self.installations_performed = True
         final_message = install_message or f"'{display_name}' installé avec succès."
@@ -1832,68 +2127,68 @@ class ModInstallerDialog(QtWidgets.QDialog):
                         return False, f"Copie de '{os.path.basename(file_path)}' annulée.", []
                 shutil.copy2(file_path, destination_path)
                 installed_entries.append(os.path.basename(destination_path))
-            else:
-                if zip_plan is None:
-                    plan_result = build_zip_install_plan(
-                        file_path,
-                        mod_directory=os.path.dirname(target_folder) or ".",
-                        default_mod_name=os.path.basename(target_folder.rstrip("/\\")) or sanitize_mod_folder_name(target_folder),
-                        existing_target=target_folder,
-                    )
-                    if not plan_result.success or plan_result.plan is None:
-                        return False, plan_result.message or "Impossible de préparer l'extraction de l'archive.", []
-                    zip_plan = plan_result.plan
-
-                target_folder = zip_plan.target_folder
+            elif extension == ".zip":
+                # Extract ZIP preserving internal folder/file names (no renaming), with safety checks
                 target_root = os.path.abspath(target_folder)
-                plan_warnings.extend(zip_plan.warnings)
-                created_dirs: Set[Tuple[str, ...]] = set()
-                written_paths: Set[Tuple[str, ...]] = set()
-
                 with zipfile.ZipFile(file_path, "r") as archive:
-                    for entry in zip_plan.entries:
-                        relative_parts = list(entry.relative_parts)
-                        if not relative_parts:
+                    for info in archive.infolist():
+                        member_name = str(info.filename)
+                        norm = member_name.replace("\\", "/").lstrip("/").strip()
+                        if not norm or norm.endswith("/"):
+                            continue  # directory entries handled implicitly
+                        parts = [p for p in norm.split("/") if p and p not in {".", ".."}]
+                        if not parts:
                             continue
-
-                        for depth in range(1, len(relative_parts)):
-                            dir_parts = tuple(relative_parts[:depth])
-                            dir_path = os.path.join(target_root, *dir_parts)
-                            if os.path.exists(dir_path):
-                                if not os.path.isdir(dir_path):
-                                    display = "/".join(dir_parts)
-                                    return False, (
-                                        f"Impossible de créer le dossier '{display}' : un fichier du même nom existe déjà."
-                                    ), []
-                            else:
-                                os.makedirs(dir_path, exist_ok=True)
-                                if dir_parts not in created_dirs:
-                                    created_dirs.add(dir_parts)
-                                    installed_entries.append("/".join(dir_parts) + "/")
-
-                        relative_parts = _resolve_file_conflicts(
-                            target_root,
-                            relative_parts,
-                            plan_warnings,
-                            written_paths,
-                        )
-                        destination_path = os.path.join(target_root, *relative_parts)
-                        destination_path = os.path.abspath(destination_path)
-                        if os.path.commonpath([target_root, destination_path]) != target_root:
+                        # Skip ignored prefixes and files
+                        if _member_should_be_skipped(parts, parts[0]):
                             continue
-
-                        parent_dir = os.path.dirname(destination_path)
-                        os.makedirs(parent_dir, exist_ok=True)
-
-                        with archive.open(entry.member_name, "r") as source, open(destination_path, "wb") as target_file:
-                            shutil.copyfileobj(source, target_file)
-
-                        display_path = "/".join(relative_parts)
-                        if display_path not in installed_entries:
-                            installed_entries.append(display_path)
+                        # Disallow dangerous extensions
+                        _, ext = os.path.splitext(parts[-1])
+                        if ext.lower() in DISALLOWED_ARCHIVE_EXTENSIONS:
+                            plan_warnings.append(f"Fichier ignoré pour sécurité: {norm}")
+                            continue
+                        dest_path = os.path.abspath(os.path.join(target_root, *parts))
+                        if os.path.commonpath([target_root, dest_path]) != target_root:
+                            continue
+                        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                        try:
+                            with archive.open(info, "r") as source, open(dest_path, "wb") as target_file:
+                                shutil.copyfileobj(source, target_file)
+                            # Preserve timestamp if present
+                            try:
+                                dt = datetime(*info.date_time)
+                                os.utime(dest_path, (dt.timestamp(), dt.timestamp()))
+                            except Exception:
+                                pass
+                            rel_display = "/".join(parts)
+                            installed_entries.append(rel_display)
+                        except OSError as exc:
+                            plan_warnings.append(f"Écriture impossible: {norm} → {exc}")
 
                 if not installed_entries:
-                    return False, "L'archive ne contient aucun fichier exploitable après normalisation.", []
+                    return False, "L'archive ne contient aucun fichier exploitable.", []
+            else:
+                # Try to extract via 7-Zip for .7z/.rar
+                seven_zip = self._find_7z_executable()
+                if not seven_zip:
+                    return False, "7-Zip (7z) est requis pour extraire ce format (7z/rar). Installez 7-Zip et ajoutez-le au PATH.", []
+                # Snapshot before extraction
+                before_set = self._snapshot_relative_files(target_folder)
+                # Extract
+                args = [seven_zip, 'x', '-y', f"-o{target_folder}", file_path]
+                try:
+                    completed = subprocess.run(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                except OSError as exc:
+                    return False, f"Échec de l'extraction via 7z: {exc}", []
+                if completed.returncode != 0:
+                    output = (completed.stderr or completed.stdout or "").strip()
+                    return False, f"Extraction 7z a échoué: {output}", []
+                # Snapshot after extraction and compute diff
+                after_set = self._snapshot_relative_files(target_folder)
+                new_rel = sorted(after_set - before_set)
+                if not new_rel:
+                    return False, "Aucun fichier extrait (archive vide ou sans contenu exploitable).", []
+                installed_entries.extend(new_rel)
         except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
             return False, f"Erreur lors de la copie : {exc}", []
 
@@ -1902,6 +2197,32 @@ class ModInstallerDialog(QtWidgets.QDialog):
         if plan_warnings:
             message = message + "\n" + "\n".join(plan_warnings)
         return True, message, installed_entries
+
+    def _find_7z_executable(self):
+        candidates = [
+            "7z",
+            os.path.join(os.environ.get("ProgramFiles", r"C:\\Program Files"), "7-Zip", "7z.exe"),
+            os.path.join(os.environ.get("ProgramFiles(x86)", r"C:\\Program Files (x86)"), "7-Zip", "7z.exe"),
+        ]
+        for path in candidates:
+            if not path:
+                continue
+            try:
+                completed = subprocess.run([path, "-h"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                if completed.returncode == 0 or completed.stdout or completed.stderr:
+                    return path
+            except Exception:
+                continue
+        return None
+
+    def _snapshot_relative_files(self, target_folder):
+        root = os.path.abspath(target_folder)
+        rels = set()
+        for cur, _dirs, files in os.walk(root):
+            for f in files:
+                rel = os.path.relpath(os.path.join(cur, f), root).replace("\\", "/")
+                rels.add(rel)
+        return rels
 
     @staticmethod
     def _describe_install_type(file_paths):
@@ -1921,6 +2242,14 @@ class ModInstallerDialog(QtWidgets.QDialog):
     def _record_installation(self, entry):
         normalized_entry = dict(entry)
         normalized_entry["addons"] = normalize_addon_metadata(entry.get("addons", []))
+        # Normalize and store file list if provided
+        files = []
+        for p in normalized_entry.get("files", []) or []:
+            s = str(p).replace("\\", "/").strip()
+            if s and s not in files:
+                files.append(s)
+        if files:
+            normalized_entry["files"] = files
 
         target = normalized_entry.get("target_folder")
         if not target:
@@ -1928,16 +2257,87 @@ class ModInstallerDialog(QtWidgets.QDialog):
         replaced = False
         for existing in self.installed_mods:
             if existing.get("target_folder") == target:
-                existing.update(normalized_entry)
+                # Merge dict but union addons and files lists
+                for k, v in normalized_entry.items():
+                    if k in {"addons", "files"}:
+                        continue
+                    existing[k] = v
                 existing["addons"] = normalize_addon_metadata(existing.get("addons", []))
+                merged_files = []
+                for lst in (existing.get("files", []) or [], normalized_entry.get("files", []) or []):
+                    for p in lst:
+                        if p and p not in merged_files:
+                            merged_files.append(p)
+                if merged_files:
+                    existing["files"] = merged_files
                 replaced = True
                 break
         if not replaced:
             normalized_entry.setdefault("addons", [])
+            normalized_entry.setdefault("files", [])
             self.installed_mods.append(normalized_entry)
         self.installed_mods.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
         save_installed_mods(self.installed_mods)
         self.refresh_table()
+
+    def _write_marker_file(self, target_folder, entry):
+        try:
+            marker_path = os.path.join(target_folder, MOD_MARKER_FILENAME)
+            data = {
+                "name": entry.get("name", ""),
+                "type": entry.get("type", ""),
+                "installed_at": entry.get("installed_at", ""),
+                "source": entry.get("source", ""),
+                "app_version": APP_VERSION,
+                "app_version_date": APP_VERSION_DATE,
+                "files": list(entry.get("files", []) or []),
+                "mod_version": entry.get("mod_version", ""),
+                "url": entry.get("url", ""),
+            }
+            with open(marker_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _recover_from_markers(self):
+        if not self.mod_directory or not os.path.isdir(self.mod_directory):
+            QtWidgets.QMessageBox.warning(self, "Dossier des mods invalide", "Définis un dossier des mods valide dans la configuration.")
+            return
+        recovered = 0
+        errors = []
+        seen_targets = set()
+        try:
+            for root, dirs, files in os.walk(self.mod_directory):
+                if MOD_MARKER_FILENAME in files:
+                    marker_path = os.path.join(root, MOD_MARKER_FILENAME)
+                    try:
+                        with open(marker_path, "r", encoding="utf-8") as fh:
+                            data = json.load(fh)
+                        entry = {
+                            "name": str(data.get("name") or os.path.basename(root)),
+                            "type": str(data.get("type") or ""),
+                            "installed_at": str(data.get("installed_at") or ""),
+                            "target_folder": root,
+                            "source": str(data.get("source") or ""),
+                            "addons": [],
+                            "files": list(data.get("files", []) or []),
+                            "mod_version": str(data.get("mod_version") or ""),
+                            "url": str(data.get("url") or ""),
+                        }
+                        target_key = os.path.normcase(os.path.abspath(root))
+                        if target_key in seen_targets:
+                            continue
+                        seen_targets.add(target_key)
+                        self._record_installation(entry)
+                        recovered += 1
+                    except (OSError, json.JSONDecodeError) as exc:
+                        errors.append(f"{marker_path} → {exc}")
+        finally:
+            self.refresh_table()
+        message = [f"{recovered} mod(s) récupéré(s) depuis les marqueurs."]
+        if errors:
+            message.append("Erreurs:\n" + "\n".join(errors))
+        QtWidgets.QMessageBox.information(self, "Recovery list", "\n".join(message))
 
     def _show_context_menu(self, position):
         item = self.table.itemAt(position)
@@ -1952,9 +2352,17 @@ class ModInstallerDialog(QtWidgets.QDialog):
         search_action = menu.addAction("Recherche Google")
         menu.addSeparator()
         open_action = menu.addAction("Ouvrir dans l'explorateur")
+        rename_action = menu.addAction("Renommer le mod")
+        set_version_action = menu.addAction("Définir version…")
+        set_url_action = menu.addAction("Définir URL…")
         addons_action = menu.addAction("Ajouter add-ons")
         remove_addons_action = menu.addAction("Supprimer add-ons")
         remove_addons_action.setEnabled(bool(entry.get("addons")))
+        disable_action = None
+        if entry.get("disabled"):
+            disable_action = menu.addAction("Réactiver le mod")
+        else:
+            disable_action = menu.addAction("Désactiver le mod")
         delete_action = menu.addAction("Supprimer le mod")
         update_action = menu.addAction("Mettre à jour le mod")
 
@@ -1965,14 +2373,135 @@ class ModInstallerDialog(QtWidgets.QDialog):
             self._open_google_search(entry)
         elif chosen_action == open_action:
             self._open_in_file_manager(entry.get("target_folder"))
+        elif chosen_action == rename_action:
+            self._rename_mod(entry)
+        elif chosen_action == set_version_action:
+            self._set_mod_version(entry)
+        elif chosen_action == set_url_action:
+            self._set_mod_url(entry)
         elif chosen_action == addons_action:
             self._prompt_addons(entry)
         elif chosen_action == remove_addons_action:
             self._prompt_remove_addons(entry)
+        elif chosen_action == disable_action:
+            self._toggle_disable_mod(entry)
         elif chosen_action == delete_action:
             self._delete_mod(entry)
         elif chosen_action == update_action:
             self._prompt_update_mod(entry)
+
+    def _set_mod_version(self, entry):
+        current = entry.get("mod_version", "")
+        text, ok = QtWidgets.QInputDialog.getText(self, "Définir version", "Numéro de version :", QtWidgets.QLineEdit.Normal, current)
+        if not ok:
+            return
+        entry["mod_version"] = text.strip()
+        self._record_installation(entry)
+
+    def _set_mod_url(self, entry):
+        current = entry.get("url", "")
+        text, ok = QtWidgets.QInputDialog.getText(self, "Définir URL", "URL du mod :", QtWidgets.QLineEdit.Normal, current)
+        if not ok:
+            return
+        entry["url"] = text.strip()
+        self._record_installation(entry)
+
+    def _rename_mod(self, entry):
+        old_name = entry.get("name", "")
+        target_folder = entry.get("target_folder", "")
+        new_name, ok = QtWidgets.QInputDialog.getText(self, "Renommer le mod", "Nouveau nom :", QtWidgets.QLineEdit.Normal, old_name)
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            return
+        # Compute new folder path
+        parent = os.path.dirname(target_folder)
+        new_folder = os.path.join(parent, sanitize_mod_folder_name(new_name))
+        if os.path.abspath(new_folder) == os.path.abspath(target_folder):
+            entry["name"] = new_name
+            self._record_installation(entry)
+            return
+        if os.path.exists(new_folder):
+            QtWidgets.QMessageBox.warning(self, "Impossible de renommer", "Un dossier portant ce nom existe déjà.")
+            return
+        try:
+            os.rename(target_folder, new_folder)
+        except OSError as exc:
+            QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible de renommer le dossier : {exc}")
+            return
+        entry["name"] = new_name
+        entry["target_folder"] = new_folder
+        self._record_installation(entry)
+
+    def _toggle_disable_mod(self, entry):
+        backups_dir = self.parent().settings.get("backups_directory", "") if self.parent() else ""
+        if not backups_dir:
+            QtWidgets.QMessageBox.warning(self, "Backups manquant", "Définis un dossier de backups dans la configuration.")
+            return
+        disabled_root = os.path.join(backups_dir, "Disabled Mod")
+        os.makedirs(disabled_root, exist_ok=True)
+        target_folder = entry.get("target_folder", "")
+        if entry.get("disabled"):
+            # Reactivate
+            disabled_path = entry.get("disabled_path") or ""
+            if not disabled_path or not os.path.exists(disabled_path):
+                QtWidgets.QMessageBox.warning(self, "Réactivation impossible", "Le dossier désactivé est introuvable.")
+                return
+            destination = target_folder
+            final = destination
+            i = 1
+            while os.path.exists(final):
+                final = f"{destination}_{i}"
+                i += 1
+            try:
+                shutil.move(disabled_path, final)
+            except OSError as exc:
+                QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible de réactiver : {exc}")
+                return
+            entry["disabled"] = False
+            entry["disabled_path"] = ""
+            entry["target_folder"] = final
+            self._record_installation(entry)
+            QtWidgets.QMessageBox.information(self, "Mod réactivé", "Le mod a été réactivé.")
+        else:
+            # Disable (move to backups)
+            if not target_folder or not os.path.isdir(target_folder):
+                QtWidgets.QMessageBox.warning(self, "Dossier introuvable", "Le dossier du mod est introuvable.")
+                return
+            dest = os.path.join(disabled_root, os.path.basename(target_folder))
+            final = dest
+            i = 1
+            while os.path.exists(final):
+                final = f"{dest}_{i}"
+                i += 1
+            try:
+                shutil.move(target_folder, final)
+            except OSError as exc:
+                QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible de désactiver : {exc}")
+                return
+            entry["disabled"] = True
+            entry["disabled_path"] = final
+            # Keep original target_folder to restore later
+            self._record_installation(entry)
+            QtWidgets.QMessageBox.information(self, "Mod désactivé", "Le mod a été déplacé dans Backups/Disabled Mod.")
+
+    def _on_installer_item_changed(self, item):
+        try:
+            row = item.row()
+            col = item.column()
+            if row < 0 or row >= len(self.installed_mods):
+                return
+            entry = dict(self.installed_mods[row])
+            text = item.text().strip()
+            if col == 3:  # Version
+                entry["mod_version"] = text
+                self._record_installation(entry)
+            elif col == 4:  # URL
+                entry["url"] = text
+                self._record_installation(entry)
+        except Exception:
+            pass
 
     def _open_in_file_manager(self, target_path):
         if not target_path:
@@ -2276,6 +2805,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
             updated_entry["source"] = ", ".join(os.path.basename(path) for path in processed_files)
             updated_entry["addons"] = []
             self._record_installation(updated_entry)
+            self._write_marker_file(target_folder, updated_entry)
             self.installations_performed = True
 
         return success_messages, error_messages
@@ -2324,11 +2854,19 @@ class ModInstallerDialog(QtWidgets.QDialog):
             updated_entry["addons"] = normalize_addon_metadata(existing_addons)
             updated_entry["installed_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
             self._record_installation(updated_entry)
+            self._write_marker_file(target_folder, updated_entry)
             self.installations_performed = True
 
         return success_messages, error_messages
 
     def _delete_mod(self, entry):
+        # Prevent deletion if Sims is running
+        try:
+            if hasattr(self.parent(), "_is_sims_running") and self.parent()._is_sims_running():
+                QtWidgets.QMessageBox.warning(self, "Suppression impossible", "TS4_x64.exe est en cours d'exécution. Fermez le jeu avant de supprimer des mods.")
+                return
+        except Exception:
+            pass
         target_folder = entry.get("target_folder")
         mod_name = entry.get("name") or os.path.basename(target_folder or "")
         response = QtWidgets.QMessageBox.question(
@@ -2361,29 +2899,374 @@ class ModInstallerDialog(QtWidgets.QDialog):
         self.installations_performed = True
 
     def refresh_table(self):
+        self.table.blockSignals(True)
         self.table.setRowCount(len(self.installed_mods))
         for row, entry in enumerate(self.installed_mods):
             mod_name = entry.get("name", "")
             mod_type = entry.get("type", "")
             installed_at = format_installation_display(entry.get("installed_at", ""))
+            mod_version = entry.get("mod_version", "")
+            url = entry.get("url", "")
             folder_name = os.path.basename(entry.get("target_folder", ""))
+            status = "Désactivé" if entry.get("disabled") else ""
 
             addons_flag = "✗" if entry.get("addons") else ""
 
-            for column, value in enumerate((mod_name, mod_type, installed_at, folder_name, addons_flag)):
+            values = (mod_name, mod_type, installed_at, mod_version, url, folder_name, addons_flag, status)
+            for column, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
-                item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
+                # Only version (3) and URL (4) are editable
+                if column in (3, 4):
+                    try:
+                        item.setFlags(item.flags() | QtCore.Qt.ItemIsEditable)
+                    except Exception:
+                        pass
+                else:
+                    item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
+                # visual cue for disabled
+                if status:
+                    item.setForeground(QtGui.QBrush(QtGui.QColor("#aaaaaa")))
                 self.table.setItem(row, column, item)
+        self.table.blockSignals(False)
+        # Ensure change handler connected once
+        try:
+            if not getattr(self, "_item_changed_connected", False):
+                self.table.itemChanged.connect(self._on_installer_item_changed)
+                self._item_changed_connected = True
+        except Exception:
+            pass
+
+
+class DuplicateFinderDialog(QtWidgets.QDialog):
+    def __init__(self, parent, root_directory):
+        super().__init__(parent)
+        self.setWindowTitle("Find duplicates")
+        self.setModal(True)
+        self.resize(800, 520)
+        self.root_directory = os.path.abspath(root_directory)
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        # Controls
+        path_layout = QtWidgets.QHBoxLayout()
+        path_layout.addWidget(QtWidgets.QLabel("Dossier scanné :", self))
+        self.root_edit = QtWidgets.QLineEdit(self)
+        self.root_edit.setReadOnly(True)
+        self.root_edit.setText(self.root_directory)
+        path_layout.addWidget(self.root_edit)
+        layout.addLayout(path_layout)
+
+        options_layout = QtWidgets.QHBoxLayout()
+        self.strict_checkbox = QtWidgets.QCheckBox("Scan avancé (même taille)", self)
+        self.strict_checkbox.setChecked(False)
+        options_layout.addWidget(self.strict_checkbox)
+
+        self.package_checkbox = QtWidgets.QCheckBox("Inclure .package", self)
+        self.package_checkbox.setChecked(True)
+        options_layout.addWidget(self.package_checkbox)
+
+        self.ts4_checkbox = QtWidgets.QCheckBox("Inclure .ts4script", self)
+        self.ts4_checkbox.setChecked(True)
+        options_layout.addWidget(self.ts4_checkbox)
+
+        options_layout.addStretch(1)
+        self.scan_button = QtWidgets.QPushButton("Analyser", self)
+        self.scan_button.clicked.connect(self._run_scan)
+        options_layout.addWidget(self.scan_button)
+        layout.addLayout(options_layout)
+
+        # Results tree
+        self.tree = QtWidgets.QTreeWidget(self)
+        self.tree.setColumnCount(4)
+        self.tree.setHeaderLabels(["Fichier", "Chemin", "Taille (o)", "Modifié le"])
+        self.tree.setAlternatingRowColors(True)
+        self.tree.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
+        self.tree.itemDoubleClicked.connect(self._open_item_in_explorer)
+        self.tree.itemSelectionChanged.connect(self._update_delete_button_enabled)
+        layout.addWidget(self.tree, stretch=1)
+
+        # Footer
+        footer_layout = QtWidgets.QHBoxLayout()
+        self.summary_label = QtWidgets.QLabel("", self)
+        self.progress_bar = QtWidgets.QProgressBar(self)
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setMinimum(0)
+        self.progress_bar.setMaximum(1)
+        self.progress_bar.setValue(0)
+        footer_layout.addWidget(self.summary_label)
+        footer_layout.addWidget(self.progress_bar, stretch=1)
+        footer_layout.addStretch(1)
+        self.delete_button = QtWidgets.QPushButton("Supprimer sélection", self)
+        self.delete_button.setEnabled(False)
+        self.delete_button.clicked.connect(self._delete_selected)
+        footer_layout.addWidget(self.delete_button)
+        close_button = QtWidgets.QPushButton("Fermer", self)
+        close_button.clicked.connect(self.accept)
+        footer_layout.addWidget(close_button)
+        layout.addLayout(footer_layout)
+
+        QtCore.QTimer.singleShot(0, self._run_scan)
+
+    def _open_item_in_explorer(self, item, _column):
+        # If it is a child (has a path), attempt to open its folder
+        path = item.text(1).strip()
+        if not path:
+            return
+        directory = os.path.dirname(path) or path
+        parent = self.parent()
+        if hasattr(parent, "_open_in_file_manager"):
+            parent._open_in_file_manager(directory)
+
+    def _iter_files(self, include_package=True, include_ts4=True):
+        allowed = set()
+        if include_package:
+            allowed.add(".package")
+        if include_ts4:
+            allowed.add(".ts4script")
+        backups_directory = ""
+        try:
+            if hasattr(self.parent(), "settings"):
+                backups_directory = os.path.normpath(self.parent().settings.get("backups_directory", ""))
+        except Exception:
+            backups_directory = ""
+
+        for current_root, dirs, files in os.walk(self.root_directory):
+            # skip backups directory subtree
+            if backups_directory:
+                dirs[:] = [d for d in dirs if os.path.normpath(os.path.join(current_root, d)) != backups_directory]
+            for file_name in files:
+                ext = os.path.splitext(file_name)[1].lower()
+                if ext not in allowed:
+                    continue
+                full_path = os.path.join(current_root, file_name)
+                yield full_path, file_name
+
+    def _run_scan(self):
+        self.tree.clear()
+        self.scan_button.setEnabled(False)
+        self.delete_button.setEnabled(False)
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setMaximum(0)  # busy while enumerating
+        self.progress_bar.setValue(0)
+        self._yield()
+        include_package = self.package_checkbox.isChecked()
+        include_ts4 = self.ts4_checkbox.isChecked()
+        strict = self.strict_checkbox.isChecked()
+        # enumerate files first
+        files = list(self._iter_files(include_package, include_ts4))
+        total = len(files)
+        self.progress_bar.setMaximum(max(1, total))
+        self.progress_bar.setValue(0)
+
+        records_by_key = defaultdict(list)
+        for idx, (full_path, file_name) in enumerate(files, start=1):
+            try:
+                stat_result = os.stat(full_path)
+                size = int(stat_result.st_size)
+                mtime = int(stat_result.st_mtime)
+            except OSError:
+                size = -1
+                mtime = -1
+            name_key = file_name.casefold()
+            if strict:
+                key = (name_key, size)  # date removed from advanced matching
+            else:
+                key = name_key
+            records_by_key[key].append((file_name, full_path, size, mtime))
+
+            if idx % 25 == 0 or idx == total:
+                self.progress_bar.setValue(min(idx, total))
+                self._yield()
+
+        duplicate_groups = []
+        for key, items in records_by_key.items():
+            if len(items) > 1:
+                items_sorted = sorted(items, key=lambda t: t[1].casefold())
+                filename = items_sorted[0][0]
+                duplicate_groups.append((filename, items_sorted))
+
+        duplicate_groups.sort(key=lambda g: g[0].casefold())
+
+        for filename, items in duplicate_groups:
+            top = QtWidgets.QTreeWidgetItem([self._format_group_title(filename, len(items)), "", "", ""])
+            self.tree.addTopLevelItem(top)
+            for _, path, size, mtime in items:
+                dt = datetime.fromtimestamp(mtime) if mtime and mtime > 0 else None
+                top.addChild(QtWidgets.QTreeWidgetItem([
+                    "",
+                    os.path.abspath(path),
+                    str(size if size >= 0 else ""),
+                    format_datetime(dt) if dt else "",
+                ]))
+            top.setExpanded(True)
+
+        self.progress_bar.setVisible(False)
+        self.scan_button.setEnabled(True)
+        self._update_summary()
+        self._update_delete_button_enabled()
+        if hasattr(self.parent(), "logger"):
+            try:
+                self.parent().logger.info("Duplicate scan in %s: %d groups", self.root_directory, len(duplicate_groups))
+            except Exception:
+                pass
+
+    def _yield(self):
+        app = QtWidgets.QApplication.instance()
+        if app is not None:
+            try:
+                app.processEvents()
+            except Exception:
+                pass
+
+    def _format_group_title(self, filename, count):
+        return f"{filename} ({count})"
+
+    def _update_group_title(self, group_item):
+        if group_item is None:
+            return
+        # Count only children that are still present
+        count = group_item.childCount()
+        # Extract original filename from current title (before space + '(')
+        title = group_item.text(0)
+        base = title.split(' (', 1)[0]
+        group_item.setText(0, self._format_group_title(base, count))
+
+    def _update_summary(self):
+        self.summary_label.setText(f"Groupes de doublons : {self.tree.topLevelItemCount()}")
+
+    def _update_delete_button_enabled(self):
+        items = self.tree.selectedItems()
+        deletable = False
+        for it in items:
+            if it and it.parent() is not None and it.text(1).strip():
+                deletable = True
+                break
+        self.delete_button.setEnabled(deletable)
+
+    def _delete_selected(self):
+        selected = [it for it in self.tree.selectedItems() if it.parent() is not None and it.text(1).strip()]
+        if not selected:
+            return
+        # Unique paths only
+        to_delete = []
+        seen = set()
+        for it in selected:
+            path = it.text(1).strip()
+            if path and path not in seen:
+                seen.add(path)
+                to_delete.append((it, path))
+
+        confirm = QtWidgets.QMessageBox.question(
+            self,
+            "Confirmer la suppression",
+            f"Supprimer définitivement {len(to_delete)} fichier(s) ?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if confirm != QtWidgets.QMessageBox.Yes:
+            return
+
+        errors = []
+        deleted = 0
+        # Delete files and remove items from tree
+        for item, path in to_delete:
+            try:
+                if os.path.isfile(path):
+                    os.remove(path)
+                else:
+                    raise OSError("fichier introuvable")
+                parent = item.parent()
+                idx = parent.indexOfChild(item)
+                parent.takeChild(idx)
+                self._update_group_title(parent)
+                # Remove group if less than 2 remain
+                if parent.childCount() < 2:
+                    top_index = self.tree.indexOfTopLevelItem(parent)
+                    self.tree.takeTopLevelItem(top_index)
+                deleted += 1
+            except OSError as exc:
+                errors.append(f"{path} → {exc}")
+
+        self._update_summary()
+        self._update_delete_button_enabled()
+        if deleted:
+            QtWidgets.QMessageBox.information(self, "Suppression terminée", f"{deleted} fichier(s) supprimé(s).")
+        if errors:
+            QtWidgets.QMessageBox.warning(self, "Erreurs de suppression", "\n".join(errors))
+
+
+class GroupViewDialog(QtWidgets.QDialog):
+    def __init__(self, parent, rows):
+        super().__init__(parent)
+        self.setWindowTitle("Group View")
+        self.setModal(True)
+        self.resize(860, 540)
+
+        layout = QtWidgets.QVBoxLayout(self)
+        toolbar = QtWidgets.QHBoxLayout()
+        expand_btn = QtWidgets.QPushButton("Expand All", self)
+        collapse_btn = QtWidgets.QPushButton("Collapse All", self)
+        toolbar.addWidget(expand_btn)
+        toolbar.addWidget(collapse_btn)
+        toolbar.addStretch(1)
+        layout.addLayout(toolbar)
+
+        self.tree = QtWidgets.QTreeWidget(self)
+        self.tree.setColumnCount(7)
+        self.tree.setHeaderLabels([
+            "Mod (groupe)", "État", "Fichier .package", "Date .package", "Fichier .ts4script", "Date .ts4script", "Confiance"
+        ])
+        self.tree.setAlternatingRowColors(True)
+        layout.addWidget(self.tree, stretch=1)
+
+        expand_btn.clicked.connect(self.tree.expandAll)
+        collapse_btn.clicked.connect(self.tree.collapseAll)
+
+        # Group rows
+        grouped = defaultdict(list)
+        for row in rows:
+            key = row.get("group") or "(ungrouped)"
+            grouped[key].append(row)
+        for group_name in sorted(grouped.keys(), key=str.casefold):
+            items = grouped[group_name]
+            top = QtWidgets.QTreeWidgetItem([group_name, "", "", "", "", "", ""])
+            if group_name and group_name != "(ungrouped)":
+                top.setBackground(0, QtGui.QBrush(QtGui.QColor("#2e7d32")))
+                top.setForeground(0, QtGui.QBrush(QtGui.QColor("#ffffff")))
+            self.tree.addTopLevelItem(top)
+            for row in items:
+                child = QtWidgets.QTreeWidgetItem([
+                    "",
+                    str(row.get("status", "")),
+                    str(row.get("package", "")),
+                    str(row.get("package_date", "")),
+                    str(row.get("script", "")),
+                    str(row.get("script_date", "")),
+                    str(row.get("confidence", "")),
+                ])
+                # Highlight installed via Mod Installer
+                if row.get("group"):
+                    for col in range(self.tree.columnCount()):
+                        child.setBackground(col, QtGui.QBrush(QtGui.QColor("#2e7d32")))
+                        child.setForeground(col, QtGui.QBrush(QtGui.QColor("#ffffff")))
+                top.addChild(child)
+            top.setExpanded(True)
 
 
 class ModManagerApp(QtWidgets.QWidget):
-    def __init__(self):
+    def __init__(self, splash=None):
         super().__init__()
 
         self.setWindowTitle(f"Gestionnaire de Mods Sims 4 – {APP_VERSION} ({APP_VERSION_DATE})")
         self.setGeometry(100, 100, 800, 600)
 
+        # Initialize settings and logging (default DEBUG, overridable by settings)
         self.settings = load_settings()
+        self.logger = setup_logging(self.settings.get("log_level", "DEBUG"))
+        try:
+            self.logger.debug("Application starting with log level: %s", self.settings.get("log_level", "DEBUG"))
+        except Exception:
+            pass
         self.custom_version_releases = load_custom_version_releases()
         self.version_releases = merge_version_releases(self.custom_version_releases)
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
@@ -2391,9 +3274,11 @@ class ModManagerApp(QtWidgets.QWidget):
         self.all_data_rows = []
         self._cache_clear_triggered_this_refresh = False
 
+        self._splash = splash
         self.init_ui()
 
-        if not os.path.exists(MOD_SCAN_CACHE_PATH):
+        auto = bool(self.settings.get("auto_scan_on_start", True))
+        if auto or not os.path.exists(MOD_SCAN_CACHE_PATH):
             mod_directory = self.settings.get("mod_directory", "")
             if mod_directory and os.path.isdir(mod_directory):
                 QtCore.QTimer.singleShot(0, self.refresh_tree)
@@ -2444,47 +3329,69 @@ class ModManagerApp(QtWidgets.QWidget):
         self.update_mod_directory_label()
 
         # Filtrage
-        version_range_layout = QtWidgets.QHBoxLayout()
+        version_range_layout = QtWidgets.QVBoxLayout()
         self.version_filters_checkbox = QtWidgets.QCheckBox("Versions", self)
         self.version_filters_checkbox.setChecked(self.settings.get("enable_version_filters", True))
         self.version_filters_checkbox.toggled.connect(self._on_version_filters_toggled)
-        version_range_layout.addWidget(self.version_filters_checkbox)
+        version_row1 = QtWidgets.QHBoxLayout()
+        version_row1.addWidget(self.version_filters_checkbox)
 
         self.version_start_label = QtWidgets.QLabel("Version de départ :", self)
-        version_range_layout.addWidget(self.version_start_label)
+        version_row1.addWidget(self.version_start_label)
         self.version_start_combo = QtWidgets.QComboBox(self)
         self.version_start_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
-        version_range_layout.addWidget(self.version_start_combo)
+        version_row1.addWidget(self.version_start_combo)
+        version_range_layout.addLayout(version_row1)
         self.version_end_label = QtWidgets.QLabel("Version d'arrivée :", self)
-        version_range_layout.addWidget(self.version_end_label)
+        version_row2 = QtWidgets.QHBoxLayout()
+        version_row2.addWidget(self.version_end_label)
         self.version_end_combo = QtWidgets.QComboBox(self)
         self.version_end_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
-        version_range_layout.addWidget(self.version_end_combo)
+        version_row2.addWidget(self.version_end_combo)
+        version_range_layout.addLayout(version_row2)
 
-        self.show_package_mods_checkbox = QtWidgets.QCheckBox("Show Package", self)
-        self.show_package_mods_checkbox.setChecked(self.settings.get("show_package_mods", True))
-        self.show_package_mods_checkbox.toggled.connect(lambda: self.toggle_setting("show_package_mods"))
-
-        self.show_ts4script_mods_checkbox = QtWidgets.QCheckBox("Show TS4Script", self)
-        self.show_ts4script_mods_checkbox.setChecked(self.settings.get("show_ts4script_mods", True))
-        self.show_ts4script_mods_checkbox.toggled.connect(lambda: self.toggle_setting("show_ts4script_mods"))
+        # Filter mode dropdown (replaces show package/ts4script checkboxes)
+        self.file_filter_combo = QtWidgets.QComboBox(self)
+        self.file_filter_combo.addItem("Show both", "both")
+        self.file_filter_combo.addItem("Show Package", "package")
+        self.file_filter_combo.addItem("Show TS4Script", "ts4script")
+        self.file_filter_combo.addItem("Mod Installer Only", "installer_only")
+        current_mode = str(self.settings.get("file_filter_mode", "both")).lower()
+        idx = self.file_filter_combo.findData(current_mode)
+        self.file_filter_combo.setCurrentIndex(idx if idx != -1 else 0)
+        self.file_filter_combo.currentIndexChanged.connect(self.on_file_filter_mode_changed)
 
         self.show_ignored_checkbox = QtWidgets.QCheckBox("Afficher les mods ignorés", self)
         self.show_ignored_checkbox.setChecked(self.settings.get("show_ignored", False))
         self.show_ignored_checkbox.toggled.connect(lambda: self.toggle_show_ignored())
-
-        filter_layout = QtWidgets.QVBoxLayout()
-        filter_layout.addLayout(version_range_layout)
-        filter_layout.addWidget(self.show_package_mods_checkbox)
-        filter_layout.addWidget(self.show_ts4script_mods_checkbox)
-        filter_layout.addWidget(self.show_ignored_checkbox)
-
-        layout.addLayout(filter_layout)
+        # Group box for filters (top-left)
+        filters_group = QtWidgets.QGroupBox("Filtres", self)
+        filters_layout = QtWidgets.QVBoxLayout(filters_group)
+        filters_layout.addLayout(version_range_layout)
+        type_row = QtWidgets.QHBoxLayout()
+        type_row.addWidget(QtWidgets.QLabel("Type :", self))
+        type_row.addWidget(self.file_filter_combo)
+        filters_layout.addLayout(type_row)
+        filters_layout.addWidget(self.show_ignored_checkbox)
+        self.show_disabled_only_checkbox = QtWidgets.QCheckBox("Afficher seulement désactivés", self)
+        self.show_disabled_only_checkbox.setChecked(self.settings.get("show_disabled_only", False))
+        self.show_disabled_only_checkbox.toggled.connect(self.toggle_show_disabled_only)
+        filters_layout.addWidget(self.show_disabled_only_checkbox)
 
         self.populate_version_combos()
         self.version_start_combo.currentIndexChanged.connect(self.on_version_filter_changed)
         self.version_end_combo.currentIndexChanged.connect(self.on_version_filter_changed)
         self._update_version_filter_visibility()
+
+        # Top bar: Filters left, Actions right (buttons will be added after creation)
+        top_bar = QtWidgets.QHBoxLayout()
+        # Slightly reduce filters group width
+        filters_group.setMaximumWidth(460)
+        top_bar.addWidget(filters_group, stretch=1)
+        self.actions_group = QtWidgets.QGroupBox("Actions", self)
+        self.actions_layout = QtWidgets.QVBoxLayout(self.actions_group)
+        top_bar.addWidget(self.actions_group, stretch=1)
+        layout.addLayout(top_bar)
 
         search_layout = QtWidgets.QHBoxLayout()
         self.search_edit = QtWidgets.QLineEdit(self)
@@ -2493,13 +3400,21 @@ class ModManagerApp(QtWidgets.QWidget):
         self.show_search_checkbox = QtWidgets.QCheckBox("Afficher recherche", self)
         self.show_search_checkbox.setChecked(self.settings.get("show_search_results", True))
         self.show_search_checkbox.toggled.connect(self.toggle_show_search_results)
+        self.instant_search_checkbox = QtWidgets.QCheckBox("Instant search", self)
+        self.instant_search_checkbox.setChecked(self.settings.get("instant_search", True))
+        self.instant_search_checkbox.toggled.connect(self.toggle_instant_search)
+        self.search_button = QtWidgets.QPushButton("Rechercher", self)
+        self.search_button.clicked.connect(partial(self.apply_search_filter, forced=True))
         search_layout.addWidget(self.show_search_checkbox)
+        search_layout.addWidget(self.instant_search_checkbox)
         search_layout.addWidget(QtWidgets.QLabel("Recherche mod :"))
         search_layout.addWidget(self.search_edit)
+        search_layout.addWidget(self.search_button)
 
         self.search_edit.setEnabled(self.show_search_checkbox.isChecked())
 
-        layout.addLayout(search_layout)
+        # Move search controls into Filters group
+        filters_layout.addLayout(search_layout)
 
         progress_layout = QtWidgets.QHBoxLayout()
         self.scan_status_label = QtWidgets.QLabel("", self)
@@ -2518,9 +3433,10 @@ class ModManagerApp(QtWidgets.QWidget):
 
         # Table des mods
         self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels([
             "État",
+            "Mod (groupe)",
             "Fichier .package",
             "Date .package",
             "Fichier .ts4script",
@@ -2530,12 +3446,16 @@ class ModManagerApp(QtWidgets.QWidget):
             "Ignoré",
         ])
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
-        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.DoubleClicked | QtWidgets.QAbstractItemView.EditKeyPressed)
 
         header = self.table.horizontalHeader()
+        # Header context menu for column visibility
+        header.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        header.customContextMenuRequested.connect(self._show_header_menu)
         for column in range(self.table.columnCount()):
             resize_mode = QtWidgets.QHeaderView.Stretch
-            if column in (0, 2, 4, 5, 6, self.table.columnCount() - 1):
+            # Ajuster la largeur au contenu pour colonnes clés
+            if column in (0, 1, 3, 5, 6, 7, self.table.columnCount() - 1):
                 resize_mode = QtWidgets.QHeaderView.ResizeToContents
             header.setSectionResizeMode(column, resize_mode)
         header.setStretchLastSection(False)
@@ -2545,6 +3465,9 @@ class ModManagerApp(QtWidgets.QWidget):
         self.table.customContextMenuRequested.connect(self.show_context_menu)
 
         layout.addWidget(self.table, stretch=1)
+
+        # Apply hidden columns from settings
+        self._apply_hidden_columns()
 
         # Boutons
         self.configuration_button = QtWidgets.QPushButton("Configuration", self)
@@ -2573,29 +3496,65 @@ class ModManagerApp(QtWidgets.QWidget):
 
         self.tools_button = QtWidgets.QPushButton("Tools", self)
         self.tools_button.clicked.connect(self.open_tools_dialog)
+        self.group_view_button = QtWidgets.QPushButton("Group View", self)
+        self.group_view_button.clicked.connect(self.open_group_view)
 
-        button_layout = QtWidgets.QHBoxLayout()
-        button_layout.addWidget(self.configuration_button)
-        button_layout.addWidget(self.mod_installer_button)
-        button_layout.addWidget(self.tools_button)
-        button_layout.addWidget(self.refresh_button)
-        button_layout.addWidget(self.export_button)
-        button_layout.addWidget(self.clear_cache_button)
-        button_layout.addWidget(self.grab_logs_button)
-        button_layout.addWidget(self.launch_button)
-        button_layout.addWidget(self.kill_button)
+        # Populate Actions group (top-right)
+        for btn in (
+            self.mod_installer_button,
+            self.tools_button,
+            self.group_view_button,
+            self.refresh_button,
+            self.export_button,
+            self.clear_cache_button,
+            self.grab_logs_button,
+            self.kill_button,
+        ):
+            self.actions_layout.addWidget(btn)
+        self.actions_layout.addStretch(1)
+        self._normalize_actions_buttons()
 
-        layout.addLayout(button_layout)
-
+        # Keep only Configuration and Launch at the bottom
+        bottom_buttons = QtWidgets.QHBoxLayout()
+        bottom_buttons.addWidget(self.configuration_button)
+        bottom_buttons.addStretch(1)
+        bottom_buttons.addWidget(self.launch_button)
+        layout.addLayout(bottom_buttons)
         # Final
         self.setLayout(layout)
         self.update_launch_button_state()
+
+    def _normalize_actions_buttons(self):
+        # Make actions buttons same width
+        buttons = []
+        for i in range(self.actions_layout.count()):
+            w = self.actions_layout.itemAt(i).widget()
+            if isinstance(w, QtWidgets.QPushButton):
+                buttons.append(w)
+        if not buttons:
+            return
+        maxw = max((b.sizeHint().width() for b in buttons), default=120)
+        for b in buttons:
+            b.setMinimumWidth(maxw)
+            b.setMaximumWidth(maxw)
+            b.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+
+        # Finalize handled in init_ui; only size normalization here
+
+    def open_group_view(self):
+        dialog = GroupViewDialog(self, list(self.all_data_rows))
+        dialog.exec_()
 
     def _update_scan_status(self, message):
         if hasattr(self, "scan_status_label") and self.scan_status_label is not None:
             self.scan_status_label.setText(message)
             self.scan_status_label.setVisible(bool(message))
             self._yield_ui_events()
+        if getattr(self, "_splash", None) is not None and message:
+            try:
+                self._splash.update_message(message)
+            except Exception:
+                pass
 
     def _start_scan_progress(self):
         if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
@@ -2613,6 +3572,12 @@ class ModManagerApp(QtWidgets.QWidget):
         if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
             self.scan_count_label.setVisible(False)
         self._yield_ui_events()
+        if getattr(self, "_splash", None) is not None:
+            try:
+                self._splash.finish(self)
+            except Exception:
+                pass
+            self._splash = None
 
     def _handle_scan_progress(self, processed, total, current_path):
         if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
@@ -2629,6 +3594,14 @@ class ModManagerApp(QtWidgets.QWidget):
                 self.scan_count_label.setText(f"Objets scannés : {processed}")
             self.scan_count_label.setVisible(True)
         self._yield_ui_events()
+        if getattr(self, "_splash", None) is not None:
+            try:
+                if total:
+                    self._splash.update_message(f"Scan {processed}/{total}")
+                elif processed:
+                    self._splash.update_message(f"Scan {processed}")
+            except Exception:
+                pass
 
     def populate_version_combos(self):
         if not hasattr(self, "version_start_combo"):
@@ -2739,6 +3712,26 @@ class ModManagerApp(QtWidgets.QWidget):
         self.search_edit.setEnabled(checked)
         self._apply_search_filter()
 
+    def toggle_instant_search(self):
+        checked = self.instant_search_checkbox.isChecked()
+        self.settings["instant_search"] = bool(checked)
+        save_settings(self.settings)
+        # Optionally run a refresh when enabling instant search
+        if checked:
+            self._apply_search_filter()
+
+    def on_file_filter_mode_changed(self):
+        idx = self.file_filter_combo.currentIndex()
+        mode = self.file_filter_combo.itemData(idx) or "both"
+        self.settings["file_filter_mode"] = str(mode)
+        save_settings(self.settings)
+        self.refresh_table_only()
+
+    def toggle_show_disabled_only(self):
+        self.settings["show_disabled_only"] = bool(self.show_disabled_only_checkbox.isChecked())
+        save_settings(self.settings)
+        self.refresh_table_only()
+
     def update_mod_directory_label(self):
         directory = self.settings.get("mod_directory", "")
         display_text = directory if directory else "(non défini)"
@@ -2756,8 +3749,9 @@ class ModManagerApp(QtWidgets.QWidget):
             if not self._cache_clear_triggered_this_refresh:
                 self.clear_sims4_cache()
 
-    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files):
+    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files, log_level=None, auto_scan_on_start=None):
         previous_mod_directory = self.settings.get("mod_directory", "")
+        previous_auto_scan = bool(self.settings.get("auto_scan_on_start", True))
         self.settings["mod_directory"] = mod_directory
         self.settings["sims_cache_directory"] = cache_directory
         self.settings["backups_directory"] = backups_directory
@@ -2765,14 +3759,38 @@ class ModManagerApp(QtWidgets.QWidget):
         self.settings["sims_executable_arguments"] = sims_executable_arguments
         self.settings["log_extra_extensions"] = sorted(set(log_extra_extensions))
         self.settings["grab_logs_ignore_files"] = list(grab_logs_ignore_files)
+        if log_level:
+            self.settings["log_level"] = str(log_level).upper()
+        if auto_scan_on_start is not None:
+            self.settings["auto_scan_on_start"] = bool(auto_scan_on_start)
         save_settings(self.settings)
+        try:
+            self.logger.info("Configuration updated (mod dir: %s)", mod_directory)
+        except Exception:
+            pass
         self.update_mod_directory_label()
         self.update_launch_button_state()
+
+        # Apply log level change immediately (if provided)
+        if log_level:
+            try:
+                setup_logging(self.settings.get("log_level", "DEBUG"))
+                self.logger = logging.getLogger("Sims4ModTool")
+                self.logger.info("Log level set to %s", self.settings.get("log_level"))
+            except Exception:
+                pass
 
         if previous_mod_directory != mod_directory:
             self.last_scanned_directory = ""
             if hasattr(self, "table"):
                 self.table.setRowCount(0)
+        # Trigger immediate scan if auto-scan has just been enabled
+        try:
+            if auto_scan_on_start is not None and bool(auto_scan_on_start) and not previous_auto_scan:
+                if mod_directory and os.path.isdir(mod_directory):
+                    QtCore.QTimer.singleShot(0, self.refresh_tree)
+        except Exception:
+            pass
 
     def refresh_tree(self):
         folder = self.settings.get("mod_directory", "")
@@ -2784,6 +3802,10 @@ class ModManagerApp(QtWidgets.QWidget):
         self.update_mod_directory_label()
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = folder
+        try:
+            self.logger.info("Refreshing tree for directory: %s", folder)
+        except Exception:
+            pass
         self._update_scan_status("Scan en cours...")
         self._start_scan_progress()
         try:
@@ -2798,6 +3820,10 @@ class ModManagerApp(QtWidgets.QWidget):
             self._finish_scan_progress()
         self.populate_table(rows)
         self._update_scan_status("")
+        try:
+            self.logger.debug("Tree refreshed. Rows: %d", len(rows))
+        except Exception:
+            pass
         self._cache_clear_triggered_this_refresh = False
         if scan_changed:
             self._cache_clear_triggered_this_refresh = True
@@ -2821,6 +3847,10 @@ class ModManagerApp(QtWidgets.QWidget):
                 self._finish_scan_progress()
             self.populate_table(rows)
             self._update_scan_status("")
+            try:
+                self.logger.debug("Table refreshed only. Rows: %d", len(rows))
+            except Exception:
+                pass
             if scan_changed:
                 self._cache_clear_triggered_this_refresh = True
                 self.clear_sims4_cache()
@@ -2869,6 +3899,10 @@ class ModManagerApp(QtWidgets.QWidget):
             messages.append("Aucun fichier ou dossier à supprimer.")
 
         QtWidgets.QMessageBox.information(self, "Nettoyage du cache", "\n".join(messages))
+        try:
+            self.logger.info("Cache cleared. Removed: %s, Missing: %s, Errors: %s", ", ".join(removed) if removed else "—", ", ".join(missing) if missing else "—", "; ".join(errors) if errors else "—")
+        except Exception:
+            pass
 
         launch_response = QtWidgets.QMessageBox.question(
             self,
@@ -2919,6 +3953,10 @@ class ModManagerApp(QtWidgets.QWidget):
 
         if not found_logs:
             QtWidgets.QMessageBox.information(self, "Aucun log", "Aucun fichier de log correspondant n'a été trouvé.")
+            try:
+                self.logger.info("Grab Logs: no matching logs found under %s", normalized_mod_dir)
+            except Exception:
+                pass
             return
 
         timestamp = datetime.now().strftime("Logs_%Y%m%d_%H%M%S")
@@ -2948,12 +3986,20 @@ class ModManagerApp(QtWidgets.QWidget):
 
         if not moved_files:
             QtWidgets.QMessageBox.information(self, "Aucun log déplacé", "Aucun fichier n'a pu être déplacé.")
+            try:
+                self.logger.info("Grab Logs: moved 0 files; errors: %d", len(errors))
+            except Exception:
+                pass
             return
 
         message_lines = [f"{len(moved_files)} fichier(s) de log déplacé(s) vers {destination_root}."]
         if errors:
             message_lines.append("\nErreurs:\n" + "\n".join(errors))
         QtWidgets.QMessageBox.information(self, "Logs sauvegardés", "\n".join(message_lines))
+        try:
+            self.logger.info("Grab Logs: moved %d files to %s; errors: %d", len(moved_files), destination_root, len(errors))
+        except Exception:
+            pass
         self._open_in_file_manager(destination_root)
 
     def launch_sims4(self):
@@ -2988,32 +4034,48 @@ class ModManagerApp(QtWidgets.QWidget):
     def kill_sims4(self):
         process_name = "TS4_x64.exe"
         if sys.platform.startswith("win"):
-            command = ["taskkill", "/F", "/IM", process_name]
-            missing_command_message = "La commande taskkill est introuvable."
+            # First, try normal taskkill
+            try:
+                completed = subprocess.run(["taskkill", "/F", "/IM", process_name], capture_output=True, text=True)
+                if completed.returncode == 0:
+                    QtWidgets.QMessageBox.information(self, "Sims 4 arrêté", "Le processus TS4_x64.exe a été arrêté avec succès.")
+                    return
+            except FileNotFoundError:
+                pass
+            # Try elevated kill via UAC prompt
+            try:
+                ps_cmd = "Start-Process -Verb RunAs powershell -ArgumentList 'Stop-Process -Name TS4_x64 -Force'"
+                completed2 = subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, text=True)
+                # We can't detect if user canceled UAC; show informational dialog
+                QtWidgets.QMessageBox.information(self, "Tentative d'arrêt", "Une demande d'élévation a été envoyée pour arrêter TS4_x64.exe. Si l'arrêt échoue, exécutez l'application en tant qu'administrateur.")
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(self, "Arrêt impossible", f"Impossible d'arrêter TS4_x64.exe : {exc}")
         else:
-            command = ["pkill", "-f", process_name]
-            missing_command_message = "La commande pkill est introuvable."
+            try:
+                completed = subprocess.run(["pkill", "-f", process_name], capture_output=True, text=True)
+                if completed.returncode == 0:
+                    QtWidgets.QMessageBox.information(self, "Sims 4 arrêté", "Le processus a été arrêté avec succès.")
+                else:
+                    output = completed.stderr.strip() or completed.stdout.strip() or "La commande a échoué."
+                    QtWidgets.QMessageBox.warning(self, "Aucun processus arrêté", output)
+            except FileNotFoundError:
+                QtWidgets.QMessageBox.critical(self, "Commande introuvable", "La commande pkill est introuvable.")
 
-        try:
-            completed = subprocess.run(command, capture_output=True, text=True)
-        except FileNotFoundError:
-            QtWidgets.QMessageBox.critical(self, "Commande introuvable", missing_command_message)
-            return
-
-        if completed.returncode == 0:
-            QtWidgets.QMessageBox.information(
-                self,
-                "Sims 4 arrêté",
-                "Le processus TS4_x64.exe a été arrêté avec succès.",
-            )
-            return
-
-        output = completed.stderr.strip() or completed.stdout.strip() or "La commande a échoué."
-        QtWidgets.QMessageBox.warning(
-            self,
-            "Aucun processus arrêté",
-            f"Impossible d'arrêter TS4_x64.exe : {output}",
-        )
+    def _is_sims_running(self):
+        name = "TS4_x64.exe"
+        if sys.platform.startswith("win"):
+            try:
+                completed = subprocess.run(["tasklist"], capture_output=True, text=True)
+                out = (completed.stdout or "") + "\n" + (completed.stderr or "")
+                return name.lower() in out.lower()
+            except Exception:
+                return False
+        else:
+            try:
+                completed = subprocess.run(["pgrep", "-f", "TS4_x64"], capture_output=True)
+                return completed.returncode == 0
+            except Exception:
+                return False
 
     def update_launch_button_state(self):
         if hasattr(self, "launch_button"):
@@ -3026,17 +4088,30 @@ class ModManagerApp(QtWidgets.QWidget):
         dialog.setModal(True)
 
         layout = QtWidgets.QVBoxLayout(dialog)
-        button_definitions = [
-            ("Find dupplicates", "La recherche de doublons n'est pas encore disponible."),
-            ("Find non-mods files", "La détection des fichiers non mods sera ajoutée ultérieurement."),
-            ("Disable all mods", "La désactivation des mods sera proposée dans une future mise à jour."),
-            ("Correct ressource.cfg", "La correction du fichier resource.cfg n'est pas encore implémentée."),
-        ]
 
-        for label, message in button_definitions:
-            button = QtWidgets.QPushButton(label, dialog)
-            button.clicked.connect(partial(self._show_placeholder_message, label, message))
-            layout.addWidget(button)
+        btn_dup = QtWidgets.QPushButton("Find dupplicates", dialog)
+        btn_dup.clicked.connect(self.open_duplicate_finder)
+        layout.addWidget(btn_dup)
+
+        btn_nonmods = QtWidgets.QPushButton("Find non-mods files", dialog)
+        btn_nonmods.clicked.connect(partial(self._show_placeholder_message, "Find non-mods files", "La détection des fichiers non mods sera ajoutée ultérieurement."))
+        layout.addWidget(btn_nonmods)
+
+        btn_disable = QtWidgets.QPushButton("Disable all mods", dialog)
+        btn_disable.clicked.connect(partial(self._show_placeholder_message, "Disable all mods", "La désactivation des mods sera proposée dans une future mise à jour."))
+        layout.addWidget(btn_disable)
+
+        btn_cfg = QtWidgets.QPushButton("Correct resource.cfg", dialog)
+        btn_cfg.clicked.connect(self.correct_resource_cfg)
+        layout.addWidget(btn_cfg)
+
+        btn_symlink = QtWidgets.QPushButton("Symlink Mods", dialog)
+        btn_symlink.clicked.connect(partial(self._show_placeholder_message, "Symlink Mods", "La création de liens symboliques vers le dossier Mods sera ajoutée ultérieurement."))
+        layout.addWidget(btn_symlink)
+
+        btn_backup = QtWidgets.QPushButton("Backup Mods", dialog)
+        btn_backup.clicked.connect(partial(self._show_placeholder_message, "Backup Mods", "La sauvegarde du dossier Mods sera disponible dans une prochaine version."))
+        layout.addWidget(btn_backup)
 
         close_button = QtWidgets.QPushButton("Fermer", dialog)
         close_button.clicked.connect(dialog.accept)
@@ -3047,19 +4122,74 @@ class ModManagerApp(QtWidgets.QWidget):
     def _show_placeholder_message(self, title, message):
         QtWidgets.QMessageBox.information(self, title, message)
 
+    def correct_resource_cfg(self):
+        mods_dir = self.settings.get("mod_directory", "")
+        if not mods_dir or not os.path.isdir(mods_dir):
+            QtWidgets.QMessageBox.warning(self, "Dossier des mods invalide", "Définis un dossier des mods valide dans la configuration.")
+            return
+        target = os.path.join(mods_dir, "Resource.cfg")
+        expected_lines = [
+            "Priority 500",
+            "PackedFile *.package",
+            "PackedFile */*.package",
+            "PackedFile */*/*.package",
+            "PackedFile */*/*/*.package",
+            "PackedFile */*/*/*/*.package",
+            "PackedFile */*/*/*/*/*.package",
+        ]
+        expected_content = "\r\n".join(expected_lines) + "\r\n"
+        current = ""
+        if os.path.exists(target):
+            try:
+                with open(target, "r", encoding="utf-8", errors="ignore") as fh:
+                    current = fh.read()
+            except OSError:
+                current = ""
+        def _normalize(text):
+            return "\n".join([line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n") if line is not None])
+        if _normalize(current) == _normalize(expected_content):
+            QtWidgets.QMessageBox.information(self, "Resource.cfg", "Le fichier Resource.cfg est déjà conforme.")
+            return
+        # Backup existing if present
+        if os.path.exists(target):
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup = os.path.join(mods_dir, f"Resource.cfg.bak_{ts}")
+            try:
+                shutil.copy2(target, backup)
+            except OSError:
+                pass
+        try:
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write(expected_content)
+            QtWidgets.QMessageBox.information(self, "Resource.cfg", "Le fichier Resource.cfg a été corrigé.")
+        except OSError as exc:
+            QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible d'écrire Resource.cfg : {exc}")
+
+    def open_duplicate_finder(self):
+        root = self.settings.get("mod_directory", "")
+        if not root or not os.path.isdir(root):
+            QtWidgets.QMessageBox.warning(self, "Dossier des mods invalide", "Définis un dossier des mods valide dans la configuration.")
+            return
+        dialog = DuplicateFinderDialog(self, root)
+        dialog.exec_()
+
     def populate_table(self, data_rows):
         self.all_data_rows = list(data_rows)
         self._apply_search_filter()
 
-    def apply_search_filter(self, _text=None):
-        self._apply_search_filter()
+    def apply_search_filter(self, _text=None, forced=False):
+        # If instant search disabled, only process when forced=True
+        self._apply_search_filter(forced=forced)
 
-    def _apply_search_filter(self):
+    def _apply_search_filter(self, forced=False):
         query = ""
         if hasattr(self, "search_edit"):
             query = self.search_edit.text().strip().lower()
 
         show_search_results = self.settings.get("show_search_results", True)
+        instant = self.settings.get("instant_search", True)
+        if not forced and not instant:
+            return
 
         if not show_search_results:
             filtered_rows = list(self.all_data_rows)
@@ -3072,6 +4202,10 @@ class ModManagerApp(QtWidgets.QWidget):
                 if self._row_matches_query(row, query)
             ]
 
+        # Optionally filter only disabled mods
+        if self.settings.get("show_disabled_only", False):
+            filtered_rows = [row for row in filtered_rows if bool(row.get("disabled", False))]
+
         self._render_table(filtered_rows)
 
     def _row_matches_query(self, row, query):
@@ -3083,6 +4217,7 @@ class ModManagerApp(QtWidgets.QWidget):
     def _gather_searchable_values(self, row):
         values = [
             str(row.get("status", "")),
+            str(row.get("group", "")),
             str(row.get("package", "")),
             str(row.get("package_date", "")),
             str(row.get("script", "")),
@@ -3113,6 +4248,7 @@ class ModManagerApp(QtWidgets.QWidget):
             for row_index, row in enumerate(rows):
                 columns = [
                     row.get("status", ""),
+                    row.get("group", ""),
                     row.get("package", ""),
                     row.get("package_date", ""),
                     row.get("script", ""),
@@ -3125,7 +4261,7 @@ class ModManagerApp(QtWidgets.QWidget):
                     if col_idx == 0:
                         item.setData(QtCore.Qt.UserRole, tuple(row.get("ignore_candidates") or []))
                         item.setData(QtCore.Qt.UserRole + 1, tuple(row.get("paths") or []))
-                    if col_idx == 6:
+                    if col_idx == 7:
                         item.setToolTip(row.get("confidence_tooltip", ""))
                     table.setItem(row_index, col_idx, item)
 
@@ -3133,7 +4269,7 @@ class ModManagerApp(QtWidgets.QWidget):
                 ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
                 ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
                 ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-                table.setItem(row_index, 7, ignore_item)
+                table.setItem(row_index, 8, ignore_item)
 
                 ignore_checkbox = QtWidgets.QCheckBox()
                 ignore_checkbox.stateChanged.connect(
@@ -3142,7 +4278,26 @@ class ModManagerApp(QtWidgets.QWidget):
                 ignore_checkbox.blockSignals(True)
                 ignore_checkbox.setChecked(ignored)
                 ignore_checkbox.blockSignals(False)
-                table.setCellWidget(row_index, 7, ignore_checkbox)
+                table.setCellWidget(row_index, 8, ignore_checkbox)
+
+                # Highlight disabled mods (override)
+                if row.get("disabled"):
+                    bg = QtGui.QBrush(QtGui.QColor("#8b0000"))
+                    fg = QtGui.QBrush(QtGui.QColor("#ffffff"))
+                    for c in range(self.table.columnCount()):
+                        it = self.table.item(row_index, c)
+                        if it is not None:
+                            it.setBackground(bg)
+                            it.setForeground(fg)
+                # Highlight rows installed via Mod Installer (group present)
+                elif row.get("group"):
+                    bg = QtGui.QBrush(QtGui.QColor("#2e7d32"))
+                    fg = QtGui.QBrush(QtGui.QColor("#ffffff"))
+                    for c in range(self.table.columnCount()):
+                        it = self.table.item(row_index, c)
+                        if it is not None:
+                            it.setBackground(bg)
+                            it.setForeground(fg)
 
                 if row_index % 50 == 0:
                     self._yield_ui_events()
@@ -3177,7 +4332,7 @@ class ModManagerApp(QtWidgets.QWidget):
         selected_action = menu.exec_(self.table.viewport().mapToGlobal(position))
 
         if selected_action == ignore_action:
-            checkbox = self.table.cellWidget(row, 7)
+            checkbox = self.table.cellWidget(row, 8)
             if checkbox is not None:
                 checkbox.setChecked(not checkbox.isChecked())
         elif selected_action == show_in_explorer_action:
@@ -3218,6 +4373,13 @@ class ModManagerApp(QtWidgets.QWidget):
         self._open_in_file_manager(directory)
 
     def delete_mod(self, row, candidates):
+        # Prevent deletion if Sims is running
+        try:
+            if self._is_sims_running():
+                QtWidgets.QMessageBox.warning(self, "Suppression impossible", "TS4_x64.exe est en cours d'exécution. Fermez le jeu avant de supprimer des mods.")
+                return
+        except Exception:
+            pass
         paths = self._resolve_row_paths(row)
         if not paths:
             return
@@ -3263,7 +4425,8 @@ class ModManagerApp(QtWidgets.QWidget):
 
     def launch_google_search(self, row, candidates):
         file_name = ""
-        for column in (1, 3):
+        # columns: 2=package, 4=script after adding group column
+        for column in (2, 4):
             item = self.table.item(row, column)
             if item:
                 text = item.text().strip()
@@ -3310,7 +4473,7 @@ class ModManagerApp(QtWidgets.QWidget):
             for col in range(self.table.columnCount() - 1):
                 item = self.table.item(row, col)
                 row_data.append(item.text() if item else "")
-            checkbox_widget = self.table.cellWidget(row, 7)
+            checkbox_widget = self.table.cellWidget(row, self.table.columnCount() - 1)
             row_data.append(checkbox_widget.isChecked() if checkbox_widget else False)  # Ajouter l'état de la case à cocher "Ignoré"
             rows.append(row_data)
 
@@ -3325,8 +4488,95 @@ class ModManagerApp(QtWidgets.QWidget):
         export_to_excel(save_path, rows)
         QtWidgets.QMessageBox.information(self, "Info", f"Export terminé vers : {save_path}")
 
+    def _show_header_menu(self, pos):
+        header = self.table.horizontalHeader()
+        global_pos = header.mapToGlobal(pos)
+        menu = QtWidgets.QMenu(self)
+        labels = [
+            "État",
+            "Mod (groupe)",
+            "Fichier .package",
+            "Date .package",
+            "Fichier .ts4script",
+            "Date .ts4script",
+            "Version",
+            "Confiance",
+            "Ignoré",
+        ]
+        hidden = set(self.settings.get("hidden_columns", []))
+        for col, label in enumerate(labels):
+            action = QtWidgets.QAction(label, menu)
+            action.setCheckable(True)
+            action.setChecked(col not in hidden)
+            action.triggered.connect(partial(self._toggle_column_visibility, col))
+            menu.addAction(action)
+        menu.exec_(global_pos)
+
+    def _toggle_column_visibility(self, col, checked):
+        hidden = set(int(c) for c in self.settings.get("hidden_columns", []))
+        if checked and col in hidden:
+            hidden.remove(col)
+        elif not checked:
+            hidden.add(col)
+        self.settings["hidden_columns"] = sorted(int(c) for c in hidden)
+        save_settings(self.settings)
+        self.table.setColumnHidden(col, not checked)
+
+    def _apply_hidden_columns(self):
+        hidden = set(int(c) for c in self.settings.get("hidden_columns", []))
+        for col in range(self.table.columnCount()):
+            self.table.setColumnHidden(col, col in hidden)
+
 if __name__ == "__main__":
     app = QtWidgets.QApplication(sys.argv)
-    window = ModManagerApp()
+    # Splash screen at startup
+    class StartupSplash(QtWidgets.QSplashScreen):
+        def __init__(self, title):
+            pix = QtGui.QPixmap(640, 360)
+            pix.fill(QtGui.QColor("#263238"))
+            super().__init__(pix)
+            self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint)
+            self._painter = QtGui.QPainter()
+            self._title = title
+            self._message = ""
+            self._draw()
+
+        def _draw(self):
+            pix = self.pixmap()
+            p = QtGui.QPainter(pix)
+            try:
+                p.setRenderHint(QtGui.QPainter.Antialiasing)
+                # Clear background
+                p.fillRect(pix.rect(), QtGui.QColor("#263238"))
+                # Title
+                font = QtGui.QFont()
+                font.setPointSize(16)
+                font.setBold(True)
+                p.setFont(font)
+                p.setPen(QtGui.QColor("#ffffff"))
+                title_rect = pix.rect().adjusted(24, 24, -24, -pix.height()//2)
+                p.drawText(title_rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter | QtCore.Qt.TextWordWrap, self._title)
+                # Message
+                font2 = QtGui.QFont()
+                font2.setPointSize(11)
+                p.setFont(font2)
+                p.setPen(QtGui.QColor("#cfd8dc"))
+                msg_rect = pix.rect().adjusted(24, pix.height()//2 - 20, -24, -24)
+                p.drawText(msg_rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop | QtCore.Qt.TextWordWrap, self._message)
+            finally:
+                p.end()
+            self.setPixmap(pix)
+
+        def update_message(self, text):
+            self._message = str(text or "")
+            self._draw()
+
+    splash = StartupSplash(f"Sims 4 Mod Manager {APP_VERSION}\n{APP_VERSION_DATE}")
+    splash.show()
+    app.processEvents()
+
+    window = ModManagerApp(splash=splash)
     window.show()
+    # Fallback: ensure splash closes eventually
+    QtCore.QTimer.singleShot(2000, lambda: splash.finish(window) if splash is not None else None)
     sys.exit(app.exec_())
