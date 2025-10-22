@@ -8,9 +8,11 @@ import subprocess
 import webbrowser
 import zipfile
 import stat
+import hashlib
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set, Tuple
+from difflib import SequenceMatcher
 from functools import partial
 from urllib.parse import quote_plus
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -20,8 +22,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.30"
-APP_VERSION_DATE = "22/10/2025 11:32 UTC"
+APP_VERSION = "v3.31"
+APP_VERSION_DATE = "22/10/2025 11:54 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -53,6 +55,10 @@ DISALLOWED_ARCHIVE_EXTENSIONS = {
     ".php",
 }
 MAX_RELATIVE_DEPTH = 2
+
+MOD_NAME_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
+MIN_SIMILARITY_RATIO = 0.6
+MAX_SIMILARITY_CANDIDATES = 80
 
 
 @dataclass(frozen=True)
@@ -828,6 +834,29 @@ def scan_directory(directory, progress_callback=None):
     }
     return package_files, ts4script_files, snapshot
 
+
+def normalize_mod_basename(name):
+    if not name:
+        return ""
+    base_name = os.path.splitext(os.path.basename(name))[0]
+    normalized = MOD_NAME_SANITIZE_RE.sub("", base_name.casefold())
+    return normalized
+
+
+def stable_mod_name_hash(normalized_name):
+    if not normalized_name:
+        return 0
+    digest = hashlib.sha1(normalized_name.encode("utf-8", errors="ignore")).hexdigest()
+    return int(digest, 16)
+
+
+def similarity_confidence_label(ratio):
+    if ratio >= 0.9:
+        return "Élevée"
+    if ratio >= 0.75:
+        return "Moyenne"
+    return "Faible"
+
 def generate_data_rows(directory, settings, version_releases, progress_callback=None, yield_callback=None):
     package_files, ts4script_files, snapshot = scan_directory(directory, progress_callback=progress_callback)
     previous_snapshot = load_mod_scan_cache()
@@ -869,54 +898,249 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
     show_packages = settings.get("show_package_mods", True)
     show_scripts = settings.get("show_ts4script_mods", True)
 
-    # .package files
+    def _resolve_parent(path):
+        if not path:
+            return ""
+        return os.path.normcase(os.path.abspath(os.path.dirname(path)))
+
+    package_entries = {}
     for pkg, pkg_path in package_files.items():
+        normalized_name = normalize_mod_basename(pkg)
+        hash_source = normalized_name or os.path.splitext(pkg)[0].casefold()
+        package_entries[pkg] = {
+            "path": pkg_path,
+            "base": os.path.splitext(pkg)[0],
+            "normalized": normalized_name,
+            "parent": _resolve_parent(pkg_path),
+            "hash": stable_mod_name_hash(hash_source),
+        }
+
+    script_entries = {}
+    for script, script_path in ts4script_files.items():
+        normalized_name = normalize_mod_basename(script)
+        hash_source = normalized_name or os.path.splitext(script)[0].casefold()
+        script_entries[script] = {
+            "path": script_path,
+            "base": os.path.splitext(script)[0],
+            "normalized": normalized_name,
+            "parent": _resolve_parent(script_path),
+            "hash": stable_mod_name_hash(hash_source),
+        }
+
+    unpaired_packages = set(package_entries.keys())
+    unpaired_scripts = set(script_entries.keys())
+    matches: Dict[str, Dict[str, str]] = {}
+
+    # Pass 1 – même base normalisée
+    scripts_by_norm = defaultdict(list)
+    for script_name in unpaired_scripts:
+        scripts_by_norm[script_entries[script_name]["normalized"]].append(script_name)
+    for script_list in scripts_by_norm.values():
+        script_list.sort(key=str.casefold)
+
+    for pkg_name in list(unpaired_packages):
+        pkg_info = package_entries[pkg_name]
+        norm_name = pkg_info["normalized"]
+        if not norm_name:
+            continue
+        candidates = scripts_by_norm.get(norm_name)
+        if not candidates:
+            continue
+        script_name = next((candidate for candidate in candidates if candidate in unpaired_scripts), None)
+        if not script_name:
+            continue
+        normalized_display = norm_name or pkg_info["base"].casefold()
+        matches[pkg_name] = {
+            "script": script_name,
+            "confidence": "Élevée",
+            "tooltip": (
+                f"Appariement basé sur un nom normalisé identique ({normalized_display})."
+            ),
+        }
+        unpaired_packages.remove(pkg_name)
+        unpaired_scripts.remove(script_name)
+
+    # Pass 2 – même dossier parent
+    scripts_by_parent = defaultdict(list)
+    for script_name in unpaired_scripts:
+        scripts_by_parent[script_entries[script_name]["parent"]].append(script_name)
+    for script_list in scripts_by_parent.values():
+        script_list.sort(key=str.casefold)
+
+    for pkg_name in list(unpaired_packages):
+        pkg_info = package_entries[pkg_name]
+        parent = pkg_info["parent"]
+        candidates = scripts_by_parent.get(parent)
+        if not candidates:
+            continue
+        script_name = next((candidate for candidate in candidates if candidate in unpaired_scripts), None)
+        if not script_name:
+            continue
+        try:
+            rel_parent = os.path.relpath(parent, directory) if parent else "."
+        except ValueError:
+            rel_parent = parent
+        if rel_parent in (".", ""):
+            folder_display = "(racine du dossier mods)"
+        else:
+            folder_display = rel_parent.replace("\\", "/")
+        tooltip = (
+            f"Appariement basé sur le même dossier parent : {folder_display}."
+        )
+        matches[pkg_name] = {
+            "script": script_name,
+            "confidence": "Moyenne",
+            "tooltip": tooltip,
+        }
+        unpaired_packages.remove(pkg_name)
+        unpaired_scripts.remove(script_name)
+
+    # Pass 3 – similarité + fallback hash
+    scripts_by_prefix = defaultdict(list)
+    scripts_by_length = defaultdict(list)
+    for script_name in unpaired_scripts:
+        info = script_entries[script_name]
+        normalized = info["normalized"] or info["base"].casefold()
+        if normalized:
+            if len(normalized) >= 2:
+                scripts_by_prefix[(2, normalized[:2])].append(script_name)
+            scripts_by_prefix[(1, normalized[:1])].append(script_name)
+        else:
+            scripts_by_prefix[(0, "")].append(script_name)
+        scripts_by_length[len(normalized)].append(script_name)
+    for script_list in scripts_by_prefix.values():
+        script_list.sort(key=str.casefold)
+
+    similarity_candidates = []
+    for pkg_name in list(unpaired_packages):
+        pkg_info = package_entries[pkg_name]
+        normalized = pkg_info["normalized"] or pkg_info["base"].casefold()
+        if not normalized and not pkg_info["base"]:
+            continue
+        prefixes = []
+        if normalized:
+            if len(normalized) >= 2:
+                prefixes.append((2, normalized[:2]))
+            prefixes.append((1, normalized[:1]))
+        else:
+            base_lower = pkg_info["base"].casefold()
+            if len(base_lower) >= 2:
+                prefixes.append((2, base_lower[:2]))
+            if base_lower:
+                prefixes.append((1, base_lower[:1]))
+        if not prefixes:
+            prefixes.append((0, ""))
+
+        seen_scripts = set()
+        for prefix in prefixes:
+            for script_name in scripts_by_prefix.get(prefix, []):
+                if script_name not in unpaired_scripts or script_name in seen_scripts:
+                    continue
+                seen_scripts.add(script_name)
+                script_info = script_entries[script_name]
+                script_norm = script_info["normalized"] or script_info["base"].casefold()
+                ratio = SequenceMatcher(None, normalized, script_norm).ratio()
+                if ratio < MIN_SIMILARITY_RATIO:
+                    continue
+                hash_gap = abs(pkg_info["hash"] - script_info["hash"])
+                similarity_candidates.append((ratio, hash_gap, pkg_name, script_name))
+                if len(seen_scripts) >= MAX_SIMILARITY_CANDIDATES:
+                    break
+            if len(seen_scripts) >= MAX_SIMILARITY_CANDIDATES:
+                break
+
+        if not seen_scripts:
+            target_length = len(normalized)
+            length_offsets = [0, 1, -1, 2, -2]
+            for offset in length_offsets:
+                candidate_length = target_length + offset
+                if candidate_length < 0:
+                    continue
+                for script_name in scripts_by_length.get(candidate_length, []):
+                    if script_name not in unpaired_scripts or script_name in seen_scripts:
+                        continue
+                    seen_scripts.add(script_name)
+                    script_info = script_entries[script_name]
+                    script_norm = script_info["normalized"] or script_info["base"].casefold()
+                    ratio = SequenceMatcher(None, normalized, script_norm).ratio()
+                    if ratio < MIN_SIMILARITY_RATIO:
+                        continue
+                    hash_gap = abs(pkg_info["hash"] - script_info["hash"])
+                    similarity_candidates.append((ratio, hash_gap, pkg_name, script_name))
+                    if len(seen_scripts) >= MAX_SIMILARITY_CANDIDATES:
+                        break
+                if len(seen_scripts) >= MAX_SIMILARITY_CANDIDATES:
+                    break
+
+    similarity_candidates.sort(key=lambda item: (-item[0], item[1], item[2], item[3]))
+
+    for ratio, hash_gap, pkg_name, script_name in similarity_candidates:
+        if pkg_name not in unpaired_packages or script_name not in unpaired_scripts:
+            continue
+        confidence = similarity_confidence_label(ratio)
+        hash_note = f" (écart hash {hash_gap})" if hash_gap else ""
+        tooltip = (
+            f"Appariement basé sur la similarité des noms (SequenceMatcher {ratio:.2f}). "
+            f"Départage assuré par un hash stable pour les égalités{hash_note}."
+        )
+        matches[pkg_name] = {
+            "script": script_name,
+            "confidence": confidence,
+            "tooltip": tooltip,
+        }
+        unpaired_packages.remove(pkg_name)
+        unpaired_scripts.remove(script_name)
+
+    # Lignes finales
+    for pkg, pkg_info in package_entries.items():
+        pkg_path = pkg_info["path"]
         pkg_date = get_file_date(pkg_path)
-        base_name = os.path.splitext(pkg)[0]
-        script_file = f"{base_name}.ts4script"
-        script_path = ts4script_files.get(script_file)
+        match_info = matches.get(pkg)
+        script_name = match_info["script"] if match_info else ""
+        script_path = ts4script_files.get(script_name) if script_name else None
         script_date = get_file_date(script_path) if script_path else None
 
-        mod_latest_date = max((date for date in (pkg_date, script_date) if date is not None), default=None)
+        mod_latest_date = max((dt for dt in (pkg_date, script_date) if dt is not None), default=None)
 
-        # Appliquer filtres
         if end_limit and mod_latest_date and mod_latest_date > end_limit:
             continue
         if start_limit and mod_latest_date and mod_latest_date < start_limit:
             continue
+
         has_package = True
         has_script = script_path is not None
         if not ((has_package and show_packages) or (has_script and show_scripts)):
             continue
 
-        candidates = [name for name in (pkg, script_file if script_path else None) if name]
+        candidates = [name for name in (pkg, script_name if script_path else None) if name]
         ignored = any(name in ignored_mods for name in candidates)
         if ignored and not show_ignored:
             continue
 
         status = "X" if script_path else "MS"
         version = estimate_version_from_dates(pkg_date, script_date, version_releases)
+        confidence_value = match_info["confidence"] if match_info else "—"
+        confidence_tooltip = match_info["tooltip"] if match_info else "Aucun appariement détecté."
 
         data_rows.append({
             "status": status,
             "package": pkg,
             "package_date": format_datetime(pkg_date),
-            "script": script_file if script_path else "",
+            "script": script_name if script_path else "",
             "script_date": format_datetime(script_date),
             "version": version,
+            "confidence": confidence_value,
+            "confidence_tooltip": confidence_tooltip,
             "ignored": ignored,
             "ignore_candidates": candidates or [pkg],
             "paths": [path for path in (pkg_path, script_path) if path],
         })
         _maybe_yield()
 
-    # ts4script orphans
-    for script, script_path in ts4script_files.items():
-        base_name = os.path.splitext(script)[0]
-        pkg_file = f"{base_name}.package"
-        if pkg_file in package_files:
+    for script_name in sorted(unpaired_scripts, key=str.casefold):
+        script_path = ts4script_files.get(script_name)
+        if not script_path:
             continue
-
         script_date = get_file_date(script_path)
 
         if end_limit and script_date and script_date > end_limit:
@@ -925,21 +1149,24 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
             continue
         if not show_scripts:
             continue
-        candidates = [script]
+
+        candidates = [script_name]
         ignored = any(name in ignored_mods for name in candidates)
         if ignored and not show_ignored:
             continue
-        status = "MP"
 
+        status = "MP"
         version = estimate_version_from_dates(None, script_date, version_releases)
 
         data_rows.append({
             "status": status,
             "package": "",
             "package_date": "",
-            "script": script,
+            "script": script_name,
             "script_date": format_datetime(script_date),
             "version": version,
+            "confidence": "—",
+            "confidence_tooltip": "Aucun package correspondant trouvé.",
             "ignored": ignored,
             "ignore_candidates": candidates,
             "paths": [script_path],
@@ -966,6 +1193,7 @@ def export_to_excel(save_path, data_rows):
         "Fichier .ts4script",
         "Date .ts4script",
         "Version",
+        "Confiance",
         "Ignoré",
     ]
     for idx, h in enumerate(headers, start=1):
@@ -2290,7 +2518,7 @@ class ModManagerApp(QtWidgets.QWidget):
 
         # Table des mods
         self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "État",
             "Fichier .package",
@@ -2298,6 +2526,7 @@ class ModManagerApp(QtWidgets.QWidget):
             "Fichier .ts4script",
             "Date .ts4script",
             "Version",
+            "Confiance",
             "Ignoré",
         ])
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
@@ -2306,7 +2535,7 @@ class ModManagerApp(QtWidgets.QWidget):
         header = self.table.horizontalHeader()
         for column in range(self.table.columnCount()):
             resize_mode = QtWidgets.QHeaderView.Stretch
-            if column in (0, 2, 4, 5, self.table.columnCount() - 1):
+            if column in (0, 2, 4, 5, 6, self.table.columnCount() - 1):
                 resize_mode = QtWidgets.QHeaderView.ResizeToContents
             header.setSectionResizeMode(column, resize_mode)
         header.setStretchLastSection(False)
@@ -2859,9 +3088,12 @@ class ModManagerApp(QtWidgets.QWidget):
             str(row.get("script", "")),
             str(row.get("script_date", "")),
             str(row.get("version", "")),
+            str(row.get("confidence", "")),
         ]
         ignored_value = "oui" if row.get("ignored", False) else "non"
         values.append(ignored_value)
+        if row.get("confidence_tooltip"):
+            values.append(str(row.get("confidence_tooltip")))
         values.extend(str(candidate) for candidate in row.get("ignore_candidates", []))
         values.extend(str(path) for path in row.get("paths", []))
         return [value.lower() for value in values if value]
@@ -2886,19 +3118,22 @@ class ModManagerApp(QtWidgets.QWidget):
                     row.get("script", ""),
                     row.get("script_date", ""),
                     row.get("version", ""),
+                    row.get("confidence", ""),
                 ]
                 for col_idx, value in enumerate(columns):
                     item = QtWidgets.QTableWidgetItem(str(value))
                     if col_idx == 0:
                         item.setData(QtCore.Qt.UserRole, tuple(row.get("ignore_candidates") or []))
                         item.setData(QtCore.Qt.UserRole + 1, tuple(row.get("paths") or []))
+                    if col_idx == 6:
+                        item.setToolTip(row.get("confidence_tooltip", ""))
                     table.setItem(row_index, col_idx, item)
 
                 ignored = row.get("ignored", False)
                 ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
                 ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
                 ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-                table.setItem(row_index, 6, ignore_item)
+                table.setItem(row_index, 7, ignore_item)
 
                 ignore_checkbox = QtWidgets.QCheckBox()
                 ignore_checkbox.stateChanged.connect(
@@ -2907,7 +3142,7 @@ class ModManagerApp(QtWidgets.QWidget):
                 ignore_checkbox.blockSignals(True)
                 ignore_checkbox.setChecked(ignored)
                 ignore_checkbox.blockSignals(False)
-                table.setCellWidget(row_index, 6, ignore_checkbox)
+                table.setCellWidget(row_index, 7, ignore_checkbox)
 
                 if row_index % 50 == 0:
                     self._yield_ui_events()
@@ -2942,7 +3177,7 @@ class ModManagerApp(QtWidgets.QWidget):
         selected_action = menu.exec_(self.table.viewport().mapToGlobal(position))
 
         if selected_action == ignore_action:
-            checkbox = self.table.cellWidget(row, 6)
+            checkbox = self.table.cellWidget(row, 7)
             if checkbox is not None:
                 checkbox.setChecked(not checkbox.isChecked())
         elif selected_action == show_in_explorer_action:
@@ -3071,8 +3306,12 @@ class ModManagerApp(QtWidgets.QWidget):
     def export_current(self):
         rows = []
         for row in range(self.table.rowCount()):
-            row_data = [self.table.item(row, col).text() for col in range(self.table.columnCount() - 1)]
-            row_data.append(self.table.cellWidget(row, 6).isChecked())  # Ajouter l'état de la case à cocher "Ignoré"
+            row_data = []
+            for col in range(self.table.columnCount() - 1):
+                item = self.table.item(row, col)
+                row_data.append(item.text() if item else "")
+            checkbox_widget = self.table.cellWidget(row, 7)
+            row_data.append(checkbox_widget.isChecked() if checkbox_widget else False)  # Ajouter l'état de la case à cocher "Ignoré"
             rows.append(row_data)
 
         save_path = self.settings.get("xls_file_path", "")
