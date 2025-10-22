@@ -1,5 +1,21 @@
 Changelog
 
+v3.32 (2025-10-22)
+
+- GUI
+  - Actions: added context-appropriate icons to main buttons (Refresh, Export, Clear Cache, Grab Logs, Mod Installer, Tools, Group View, Kill, Configuration, Launch).
+  - Search UI split into two rows inside Filters: row 1 has "Afficher recherche" and "Instant search"; row 2 has label, input and "Rechercher" button.
+  - Mod Installer: header context menu to show/hide columns with persisted preferences.
+  - Actions buttons normalized and arranged in an adaptive grid; labels under large icons.
+  - Bottom bar buttons reduced in height.
+  - Bottom center now displays Sims 4 Version/Build read from caches `config.log` when available.
+
+- SplashScreen
+  - New gradient background with a plumbob-like diamond and soft glow.
+  
+- Mod Installer
+  - ZIP plan now preserves subfolder names (e.g. "data") when a `.ts4script` defines the mod root.
+
 v3.31 (2025-10-22)
 
 - Mod Installer

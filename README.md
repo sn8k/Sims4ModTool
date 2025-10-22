@@ -15,6 +15,8 @@
 - Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement et possibilité d'exclure certains fichiers par nom.
 - Lancement direct de `TS4_X64.exe` avec arguments optionnels.
 - Installation de mods par glisser-déposer via la fenêtre **Mod Installer**, avec journalisation des installations, mise à jour dédiée, ajout et suppression d'add-ons.
+- Actions de l'interface dotées d'icônes (Rafraîchir, Exporter, Nettoyer cache, Récupérer logs, Mod Installer, Outils, Group View, Kill, Configuration, Lancer le jeu).
+  - Boutons d'actions normalisés en taille et disposés en grille adaptative, avec icônes au‑dessus des libellés.
 
 ## Prérequis
 - Python 3.9 ou supérieur.
@@ -70,6 +72,9 @@ Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de su
 - **Kill Sims 4** : termine le processus `TS4_x64.exe` en cours d'exécution.
 - **Mod Installer** : ouvre une fenêtre listant les mods installés via l'outil, accepte le glisser-déposer de fichiers `.package`, `.ts4script` ou `.zip`, gère la mise à jour ou l'ajout d'add-ons pour un mod existant et range automatiquement les fichiers dans des sous-dossiers dédiés du dossier de mods.
 
+Astuce: clic droit sur l'en-tête de la table du Mod Installer pour choisir quelles colonnes afficher/masquer (préférences mémorisées).
+Au bas de la fenêtre, la version et le build du jeu (si disponibles) sont affichés, lus depuis `config.log` dans le dossier de caches.
+
 ## Gestion des journaux
 Les fichiers dont l'extension correspond à `.log`, `.txt` ou toute extension supplémentaire configurée sont déplacés dans un dossier nommé `Logs_YYYYMMDD_HHMMSS` sous le dossier de backups (sauf ceux dont le nom figure dans la liste d'exclusion configurée). L'arborescence relative depuis le dossier de mods est conservée et l'explorateur est ouvert automatiquement à la fin de l'opération.
 
@@ -106,11 +111,13 @@ Recent updates:
 - GUI
   - New Group View dialog (tree) to collapse/expand rows by mod group.
   - Table highlights rows installed via Mod Installer (green background, white text).
-  - Search: added “Instant search” toggle and manual “Rechercher” button.
+  - Search: "Afficher recherche" et "Instant search" en ligne 1; étiquette, zone de saisie et bouton "Rechercher" en ligne 2.
   - File filter dropdown: Show both / Show Package / Show TS4Script / Mod Installer Only.
   - Auto-scan on startup: configurable in settings (enabled by default). When enabled, the app scans the Mods folder at launch.
-  - Startup splash screen with status updates during initial scan.
-  - Configuration dialog reorganized and enlarged for easier navigation.
+   - Startup splash screen now features a gradient background and a plumbob-like diamond.
+   - Configuration dialog reorganized and enlarged for easier navigation.
+   - Added icons to action buttons.
+   - Action buttons normalized and arranged in an adaptive grid; bottom buttons are smaller; bottom center shows Version/Build (from caches).
   - Deleting mods is disabled while TS4_x64.exe is running (safety guard).
   - Kill Sims 4 attempts elevation on Windows when required (UAC prompt), with clear status.
   - Tools: “Correct resource.cfg” checks and fixes Mods\Resource.cfg to recommended defaults.

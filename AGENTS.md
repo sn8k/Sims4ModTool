@@ -92,3 +92,7 @@ Verrouillage des cases à cocher dans les tableaux ou listes avec une gestion d'
 Résumé :
 
 Ce fichier agents.md définit les différents agents qui interagissent dans le gestionnaire de mods Sims 4. Chaque agent a un rôle et des responsabilités spécifiques, et l'agent principal ModManager coordonne les autres agents pour fournir une expérience utilisateur cohérente.
+
+
+IMPERATIF : 
+- les fichiers README.md et CHANGELOG.md doivent toujours être à jour.

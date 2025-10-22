@@ -602,12 +602,11 @@ def _collapse_folder_name(parts):
 
 
 def _ensure_depth(parts):
+    # Preserve last segments instead of collapsing names with hyphens
+    # Example: ["betterbuy", "data", "file"] with MAX_RELATIVE_DEPTH=2 -> ["data", "file"]
     if len(parts) <= MAX_RELATIVE_DEPTH:
         return list(parts)
-    folder = _collapse_folder_name(parts[:-1])
-    if folder:
-        return [folder, parts[-1]]
-    return [parts[-1]]
+    return list(parts[-MAX_RELATIVE_DEPTH:])
 
 
 def _register_directory(existing_dirs, parts, warnings):
@@ -676,10 +675,11 @@ def _resolve_file_conflicts(target_root, relative_parts, warnings, written_paths
 
 
 def _preferred_parent_parts(entry):
+    # Keep only the immediate parent directory to preserve original folder names
     if len(entry["adjusted_parts"]) <= 1:
         return []
-    folder = _collapse_folder_name(entry["adjusted_parts"][:-1])
-    return [folder] if folder else []
+    parents = entry["adjusted_parts"][:-1]
+    return [parents[-1]]
 
 
 def _organize_zip_entries(entries):
@@ -887,6 +887,7 @@ def load_settings(path=SETTINGS_PATH):
         "file_filter_mode": "both",
         "auto_scan_on_start": True,
         "hidden_columns": [],
+        "installer_hidden_columns": [],
         "show_disabled_only": False,
         "log_level": "DEBUG",
     }
@@ -1611,8 +1612,10 @@ class ConfigurationDialog(QtWidgets.QDialog):
 
         button_box = QtWidgets.QDialogButtonBox()
         save_button = button_box.addButton("Sauvegarder", QtWidgets.QDialogButtonBox.AcceptRole)
+        reset_button = button_box.addButton("Reset config", QtWidgets.QDialogButtonBox.DestructiveRole)
         cancel_button = button_box.addButton(QtWidgets.QDialogButtonBox.Cancel)
         save_button.clicked.connect(self._save_configuration)
+        reset_button.clicked.connect(self._reset_configuration)
         cancel_button.clicked.connect(self.reject)
         layout.addWidget(button_box)
 
@@ -1703,6 +1706,41 @@ class ConfigurationDialog(QtWidgets.QDialog):
                 auto_scan_on_start,
             )
         self.accept()
+
+    def _reset_configuration(self):
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Reset configuration",
+            (
+                "Cette action va réinitialiser tous les paramètres à leurs valeurs par défaut,\n"
+                "en conservant uniquement les chemins de fichiers/dossiers. Continuer ?"
+            ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+
+        # Conserver seulement les chemins saisis dans l'UI + xls_file_path existant
+        kept = {
+            "mod_directory": self.mod_directory_edit.text().strip(),
+            "sims_cache_directory": self.cache_directory_edit.text().strip(),
+            "backups_directory": self.backups_directory_edit.text().strip(),
+            "sims_executable_path": self.sims_executable_edit.text().strip(),
+            "sims_executable_arguments": self.sims_arguments_edit.text().strip(),
+        }
+        if self._parent is not None and hasattr(self._parent, "settings"):
+            xls_path = self._parent.settings.get("xls_file_path", "")
+            if xls_path:
+                kept["xls_file_path"] = xls_path
+
+        # Écrase le fichier de configuration avec uniquement les chemins conservés
+        save_settings(kept)
+        # Recharge dans le parent pour appliquer les valeurs par défaut manquantes
+        if self._parent is not None:
+            self._parent.settings = load_settings()
+
+        QtWidgets.QMessageBox.information(self, "Reset", "Configuration réinitialisée.")
 
 
 class FileDropDialog(QtWidgets.QDialog):
@@ -1824,7 +1862,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
 
         self.table = QtWidgets.QTableWidget(self)
         self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels([
+        self._installer_headers = [
             "Mod",
             "Type",
             "Installé le",
@@ -1833,7 +1871,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
             "Dossier",
             "Addons",
             "Statut",
-        ])
+        ]
+        self.table.setHorizontalHeaderLabels(self._installer_headers)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
@@ -1841,6 +1880,18 @@ class ModInstallerDialog(QtWidgets.QDialog):
             self.table.horizontalHeader().setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeToContents)
         self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
+        # Header: right-click to toggle visible columns
+        header = self.table.horizontalHeader()
+        try:
+            header.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+            header.customContextMenuRequested.connect(self._show_installer_header_menu)
+        except Exception:
+            pass
+        self.column_filters: Dict[int, str] = {}
+        try:
+            self.table.horizontalHeader().sectionClicked.connect(self._on_header_section_clicked)
+        except Exception:
+            pass
         layout.addWidget(self.table, stretch=1)
 
         footer_layout = QtWidgets.QHBoxLayout()
@@ -2128,42 +2179,70 @@ class ModInstallerDialog(QtWidgets.QDialog):
                 shutil.copy2(file_path, destination_path)
                 installed_entries.append(os.path.basename(destination_path))
             elif extension == ".zip":
-                # Extract ZIP preserving internal folder/file names (no renaming), with safety checks
                 target_root = os.path.abspath(target_folder)
+                if zip_plan:
+                    plan_warnings.extend(zip_plan.warnings)
                 with zipfile.ZipFile(file_path, "r") as archive:
-                    for info in archive.infolist():
-                        member_name = str(info.filename)
-                        norm = member_name.replace("\\", "/").lstrip("/").strip()
-                        if not norm or norm.endswith("/"):
-                            continue  # directory entries handled implicitly
-                        parts = [p for p in norm.split("/") if p and p not in {".", ".."}]
-                        if not parts:
-                            continue
-                        # Skip ignored prefixes and files
-                        if _member_should_be_skipped(parts, parts[0]):
-                            continue
-                        # Disallow dangerous extensions
-                        _, ext = os.path.splitext(parts[-1])
-                        if ext.lower() in DISALLOWED_ARCHIVE_EXTENSIONS:
-                            plan_warnings.append(f"Fichier ignoré pour sécurité: {norm}")
-                            continue
-                        dest_path = os.path.abspath(os.path.join(target_root, *parts))
-                        if os.path.commonpath([target_root, dest_path]) != target_root:
-                            continue
-                        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-                        try:
-                            with archive.open(info, "r") as source, open(dest_path, "wb") as target_file:
-                                shutil.copyfileobj(source, target_file)
-                            # Preserve timestamp if present
+                    if zip_plan and zip_plan.entries:
+                        for entry in zip_plan.entries:
                             try:
-                                dt = datetime(*info.date_time)
-                                os.utime(dest_path, (dt.timestamp(), dt.timestamp()))
-                            except Exception:
-                                pass
-                            rel_display = "/".join(parts)
-                            installed_entries.append(rel_display)
-                        except OSError as exc:
-                            plan_warnings.append(f"Écriture impossible: {norm} → {exc}")
+                                info = archive.getinfo(entry.member_name)
+                            except KeyError:
+                                plan_warnings.append(f"Entrée introuvable dans l'archive: {entry.member_name}")
+                                continue
+                            if info.is_dir():
+                                continue
+                            dest_parts = [part for part in entry.relative_parts if part]
+                            if not dest_parts:
+                                continue
+                            dest_path = os.path.abspath(os.path.join(target_root, *dest_parts))
+                            if os.path.commonpath([target_root, dest_path]) != target_root:
+                                plan_warnings.append(f"Chemin invalide ignoré: {'/'.join(dest_parts)}")
+                                continue
+                            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                            try:
+                                with archive.open(info, "r") as source, open(dest_path, "wb") as target_file:
+                                    shutil.copyfileobj(source, target_file)
+                                try:
+                                    dt = datetime(*info.date_time)
+                                    os.utime(dest_path, (dt.timestamp(), dt.timestamp()))
+                                except Exception:
+                                    pass
+                                rel_display = "/".join(dest_parts)
+                                installed_entries.append(rel_display)
+                            except OSError as exc:
+                                plan_warnings.append(f"Écriture impossible: {'/'.join(dest_parts)} → {exc}")
+                    else:
+                        for info in archive.infolist():
+                            member_name = str(info.filename)
+                            norm = member_name.replace("\\", "/").lstrip("/").strip()
+                            if not norm or norm.endswith("/"):
+                                continue  # directory entries handled implicitly
+                            parts = [p for p in norm.split("/") if p and p not in {".", ".."}]
+                            if not parts:
+                                continue
+                            if _member_should_be_skipped(parts, parts[0]):
+                                continue
+                            _, ext = os.path.splitext(parts[-1])
+                            if ext.lower() in DISALLOWED_ARCHIVE_EXTENSIONS:
+                                plan_warnings.append(f"Fichier ignoré pour sécurité: {norm}")
+                                continue
+                            dest_path = os.path.abspath(os.path.join(target_root, *parts))
+                            if os.path.commonpath([target_root, dest_path]) != target_root:
+                                continue
+                            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+                            try:
+                                with archive.open(info, "r") as source, open(dest_path, "wb") as target_file:
+                                    shutil.copyfileobj(source, target_file)
+                                try:
+                                    dt = datetime(*info.date_time)
+                                    os.utime(dest_path, (dt.timestamp(), dt.timestamp()))
+                                except Exception:
+                                    pass
+                                rel_display = "/".join(parts)
+                                installed_entries.append(rel_display)
+                            except OSError as exc:
+                                plan_warnings.append(f"Écriture impossible: {norm} → {exc}")
 
                 if not installed_entries:
                     return False, "L'archive ne contient aucun fichier exploitable.", []
@@ -2278,6 +2357,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
             self.installed_mods.append(normalized_entry)
         self.installed_mods.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
         save_installed_mods(self.installed_mods)
+        # Apply persisted hidden columns and populate
+        self._apply_installer_hidden_columns()
         self.refresh_table()
 
     def _write_marker_file(self, target_folder, entry):
@@ -2389,6 +2470,102 @@ class ModInstallerDialog(QtWidgets.QDialog):
             self._delete_mod(entry)
         elif chosen_action == update_action:
             self._prompt_update_mod(entry)
+
+    def _show_installer_header_menu(self, pos):
+        header = self.table.horizontalHeader()
+        global_pos = header.mapToGlobal(pos)
+        menu = QtWidgets.QMenu(self)
+        labels = list(self._installer_headers)
+        parent = self.parent()
+        settings = getattr(parent, "settings", {}) if parent else {}
+        hidden = set(int(c) for c in settings.get("installer_hidden_columns", []))
+        for col, label in enumerate(labels):
+            action = QtWidgets.QAction(label, menu)
+            action.setCheckable(True)
+            action.setChecked(col not in hidden)
+            action.triggered.connect(partial(self._toggle_installer_column_visibility, col))
+            menu.addAction(action)
+        menu.exec_(global_pos)
+
+    def _toggle_installer_column_visibility(self, col, checked):
+        parent = self.parent()
+        if not parent or not hasattr(parent, "settings"):
+            self.table.setColumnHidden(col, not checked)
+            return
+        settings = parent.settings
+        hidden = set(int(c) for c in settings.get("installer_hidden_columns", []))
+        if checked and col in hidden:
+            hidden.remove(col)
+        elif not checked:
+            hidden.add(col)
+        settings["installer_hidden_columns"] = sorted(int(c) for c in hidden)
+        save_settings(settings)
+        self.table.setColumnHidden(col, not checked)
+
+    def _apply_installer_hidden_columns(self):
+        parent = self.parent()
+        hidden = set()
+        if parent and hasattr(parent, "settings"):
+            hidden = set(int(c) for c in parent.settings.get("installer_hidden_columns", []))
+        for col in range(self.table.columnCount()):
+            try:
+                self.table.setColumnHidden(col, col in hidden)
+            except Exception:
+                pass
+
+    def _on_header_section_clicked(self, section):
+        if section < 0 or section >= len(self._installer_headers):
+            return
+        base_label = self._installer_headers[section]
+        current_filter = self.column_filters.get(section, "")
+        try:
+            text, ok = QtWidgets.QInputDialog.getText(
+                self,
+                "Filtrer la colonne",
+                (
+                    f"Saisis un filtre pour la colonne '{base_label}'.\n"
+                    "Laisse vide pour supprimer le filtre."
+                ),
+                QtWidgets.QLineEdit.Normal,
+                current_filter,
+            )
+        except Exception:
+            return
+        if not ok:
+            return
+        value = text.strip()
+        if value:
+            self.column_filters[section] = value
+        else:
+            self.column_filters.pop(section, None)
+        self._update_header_labels()
+        self._apply_table_filters()
+
+    def _update_header_labels(self):
+        for index, label in enumerate(self._installer_headers):
+            header_item = self.table.horizontalHeaderItem(index)
+            if not header_item:
+                continue
+            if self.column_filters.get(index):
+                header_item.setText(f"{label} (filtre)")
+            else:
+                header_item.setText(label)
+
+    def _apply_table_filters(self):
+        if not self.column_filters:
+            for row in range(self.table.rowCount()):
+                self.table.setRowHidden(row, False)
+            return
+        active_filters = {col: value.casefold() for col, value in self.column_filters.items() if value}
+        for row in range(self.table.rowCount()):
+            hide_row = False
+            for column, needle in active_filters.items():
+                item = self.table.item(row, column)
+                cell_value = item.text().casefold() if item else ""
+                if needle not in cell_value:
+                    hide_row = True
+                    break
+            self.table.setRowHidden(row, hide_row)
 
     def _set_mod_version(self, entry):
         current = entry.get("mod_version", "")
@@ -2935,6 +3112,13 @@ class ModInstallerDialog(QtWidgets.QDialog):
                 self._item_changed_connected = True
         except Exception:
             pass
+        self._update_header_labels()
+        self._apply_table_filters()
+        # Ensure column visibility persists
+        try:
+            self._apply_installer_hidden_columns()
+        except Exception:
+            pass
 
 
 class DuplicateFinderDialog(QtWidgets.QDialog):
@@ -3389,11 +3573,17 @@ class ModManagerApp(QtWidgets.QWidget):
         filters_group.setMaximumWidth(460)
         top_bar.addWidget(filters_group, stretch=1)
         self.actions_group = QtWidgets.QGroupBox("Actions", self)
-        self.actions_layout = QtWidgets.QVBoxLayout(self.actions_group)
+        self.actions_layout = QtWidgets.QGridLayout(self.actions_group)
+        try:
+            self.actions_layout.setHorizontalSpacing(12)
+            self.actions_layout.setVerticalSpacing(10)
+            self.actions_layout.setContentsMargins(8, 8, 8, 8)
+        except Exception:
+            pass
         top_bar.addWidget(self.actions_group, stretch=1)
         layout.addLayout(top_bar)
 
-        search_layout = QtWidgets.QHBoxLayout()
+        # Search controls (two rows)
         self.search_edit = QtWidgets.QLineEdit(self)
         self.search_edit.setPlaceholderText("Nom du mod à rechercher")
         self.search_edit.textChanged.connect(self.apply_search_filter)
@@ -3405,16 +3595,22 @@ class ModManagerApp(QtWidgets.QWidget):
         self.instant_search_checkbox.toggled.connect(self.toggle_instant_search)
         self.search_button = QtWidgets.QPushButton("Rechercher", self)
         self.search_button.clicked.connect(partial(self.apply_search_filter, forced=True))
-        search_layout.addWidget(self.show_search_checkbox)
-        search_layout.addWidget(self.instant_search_checkbox)
-        search_layout.addWidget(QtWidgets.QLabel("Recherche mod :"))
-        search_layout.addWidget(self.search_edit)
-        search_layout.addWidget(self.search_button)
+
+        search_row1 = QtWidgets.QHBoxLayout()
+        search_row1.addWidget(self.show_search_checkbox)
+        search_row1.addWidget(self.instant_search_checkbox)
+        search_row1.addStretch(1)
+
+        search_row2 = QtWidgets.QHBoxLayout()
+        search_row2.addWidget(QtWidgets.QLabel("Recherche mod :"))
+        search_row2.addWidget(self.search_edit)
+        search_row2.addWidget(self.search_button)
 
         self.search_edit.setEnabled(self.show_search_checkbox.isChecked())
 
         # Move search controls into Filters group
-        filters_layout.addLayout(search_layout)
+        filters_layout.addLayout(search_row1)
+        filters_layout.addLayout(search_row2)
 
         progress_layout = QtWidgets.QHBoxLayout()
         self.scan_status_label = QtWidgets.QLabel("", self)
@@ -3473,34 +3669,51 @@ class ModManagerApp(QtWidgets.QWidget):
         self.configuration_button = QtWidgets.QPushButton("Configuration", self)
         self.configuration_button.clicked.connect(self.open_configuration)
 
-        self.mod_installer_button = QtWidgets.QPushButton("Mod Installer", self)
+        # Actions group: use tool buttons with icon over text
+        self.mod_installer_button = QtWidgets.QToolButton(self)
+        self.mod_installer_button.setText("Mod Installer")
+        self.mod_installer_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
         self.mod_installer_button.clicked.connect(self.open_mod_installer)
 
-        self.refresh_button = QtWidgets.QPushButton("Analyser / Rafraîchir", self)
+        self.refresh_button = QtWidgets.QToolButton(self)
+        self.refresh_button.setText("Analyser / Rafraîchir")
+        self.refresh_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
         self.refresh_button.clicked.connect(self.refresh_tree)
 
-        self.export_button = QtWidgets.QPushButton("Exporter vers Excel", self)
+        self.export_button = QtWidgets.QToolButton(self)
+        self.export_button.setText("Exporter vers Excel")
+        self.export_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
         self.export_button.clicked.connect(self.export_current)
 
-        self.clear_cache_button = QtWidgets.QPushButton("Clear Sims4 Cache", self)
+        self.clear_cache_button = QtWidgets.QToolButton(self)
+        self.clear_cache_button.setText("Clear Sims4 Cache")
+        self.clear_cache_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
         self.clear_cache_button.clicked.connect(self.clear_sims4_cache)
 
-        self.grab_logs_button = QtWidgets.QPushButton("Grab Logs", self)
+        self.grab_logs_button = QtWidgets.QToolButton(self)
+        self.grab_logs_button.setText("Grab Logs")
+        self.grab_logs_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
         self.grab_logs_button.clicked.connect(self.grab_logs)
 
         self.launch_button = QtWidgets.QPushButton("Launch Sims 4", self)
         self.launch_button.clicked.connect(self.launch_sims4)
 
-        self.kill_button = QtWidgets.QPushButton("Kill Sims 4", self)
+        self.kill_button = QtWidgets.QToolButton(self)
+        self.kill_button.setText("Kill Sims 4")
+        self.kill_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
         self.kill_button.clicked.connect(self.kill_sims4)
 
-        self.tools_button = QtWidgets.QPushButton("Tools", self)
+        self.tools_button = QtWidgets.QToolButton(self)
+        self.tools_button.setText("Tools")
+        self.tools_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
         self.tools_button.clicked.connect(self.open_tools_dialog)
-        self.group_view_button = QtWidgets.QPushButton("Group View", self)
+        self.group_view_button = QtWidgets.QToolButton(self)
+        self.group_view_button.setText("Group View")
+        self.group_view_button.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
         self.group_view_button.clicked.connect(self.open_group_view)
 
-        # Populate Actions group (top-right)
-        for btn in (
+        # Populate Actions group (top-right) adaptively in a grid
+        self._action_buttons = [
             self.mod_installer_button,
             self.tools_button,
             self.group_view_button,
@@ -3509,37 +3722,94 @@ class ModManagerApp(QtWidgets.QWidget):
             self.clear_cache_button,
             self.grab_logs_button,
             self.kill_button,
-        ):
-            self.actions_layout.addWidget(btn)
-        self.actions_layout.addStretch(1)
-        self._normalize_actions_buttons()
+        ]
+        self._layout_action_buttons()
 
-        # Keep only Configuration and Launch at the bottom
+        # Keep only Configuration and Launch at the bottom with centered game info
         bottom_buttons = QtWidgets.QHBoxLayout()
+        # Bottom buttons: smaller height
+        try:
+            self.configuration_button.setMaximumHeight(32)
+            self.launch_button.setMaximumHeight(32)
+        except Exception:
+            pass
+
+        # Center label for game version/build
+        self.game_info_label = QtWidgets.QLabel("", self)
+        self.game_info_label.setAlignment(QtCore.Qt.AlignCenter)
+        try:
+            f_small = self.game_info_label.font()
+            f_small.setPointSize(max(8, f_small.pointSize()-1))
+            self.game_info_label.setFont(f_small)
+            self.game_info_label.setStyleSheet("color: #cfd8dc;")
+        except Exception:
+            pass
+
         bottom_buttons.addWidget(self.configuration_button)
+        bottom_buttons.addStretch(1)
+        bottom_buttons.addWidget(self.game_info_label)
         bottom_buttons.addStretch(1)
         bottom_buttons.addWidget(self.launch_button)
         layout.addLayout(bottom_buttons)
         # Final
         self.setLayout(layout)
+
+        # Apply icons to actions and bottom buttons
+        self._apply_button_icons()
+        # Populate game info label
+        try:
+            self._update_game_info_label()
+        except Exception:
+            pass
         self.update_launch_button_state()
 
     def _normalize_actions_buttons(self):
-        # Make actions buttons same width
-        buttons = []
-        for i in range(self.actions_layout.count()):
-            w = self.actions_layout.itemAt(i).widget()
-            if isinstance(w, QtWidgets.QPushButton):
-                buttons.append(w)
-        if not buttons:
-            return
-        maxw = max((b.sizeHint().width() for b in buttons), default=120)
-        for b in buttons:
-            b.setMinimumWidth(maxw)
-            b.setMaximumWidth(maxw)
-            b.setSizePolicy(QtWidgets.QSizePolicy.Fixed, QtWidgets.QSizePolicy.Fixed)
+        # Use expanding size for grid tiles; no fixed widths
+        try:
+            for i in range(self.actions_layout.count()):
+                item = self.actions_layout.itemAt(i)
+                w = item.widget() if item else None
+                if w is None:
+                    continue
+                w.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Preferred)
+        except Exception:
+            pass
 
-        # Finalize handled in init_ui; only size normalization here
+        # Re-apply layout after size change
+        try:
+            self._layout_action_buttons()
+        except Exception:
+            pass
+
+    def _layout_action_buttons(self):
+        # Adaptive grid: choose number of columns based on available width
+        try:
+            # Clear grid
+            while self.actions_layout.count():
+                item = self.actions_layout.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    self.actions_layout.removeWidget(w)
+        except Exception:
+            pass
+
+        group_width = max(1, self.actions_group.width() or self.width() // 2 or 1)
+        min_tile = 160  # pixels per tile, ensures normalized button size
+        cols = max(2, min(len(self._action_buttons), group_width // min_tile))
+        row = col = 0
+        for btn in self._action_buttons:
+            self.actions_layout.addWidget(btn, row, col)
+            col += 1
+            if col >= cols:
+                col = 0
+                row += 1
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        try:
+            self._layout_action_buttons()
+        except Exception:
+            pass
 
     def open_group_view(self):
         dialog = GroupViewDialog(self, list(self.all_data_rows))
@@ -3626,6 +3896,44 @@ class ModManagerApp(QtWidgets.QWidget):
         self.settings["enable_version_filters"] = bool(checked)
         save_settings(self.settings)
         self._update_version_filter_visibility()
+
+    def _apply_button_icons(self):
+        try:
+            style = QtWidgets.QApplication.style()
+            icon_size = QtCore.QSize(48, 48)
+            mapping = [
+                (self.mod_installer_button, QtWidgets.QStyle.SP_DialogOpenButton),
+                (self.tools_button, QtWidgets.QStyle.SP_ComputerIcon),
+                (self.group_view_button, QtWidgets.QStyle.SP_DirIcon),
+                (self.refresh_button, QtWidgets.QStyle.SP_BrowserReload),
+                (self.export_button, QtWidgets.QStyle.SP_DialogSaveButton),
+                (self.clear_cache_button, QtWidgets.QStyle.SP_TrashIcon),
+                (self.grab_logs_button, QtWidgets.QStyle.SP_FileIcon),
+                (self.kill_button, QtWidgets.QStyle.SP_MediaStop),
+                (self.configuration_button, QtWidgets.QStyle.SP_FileDialogDetailedView),
+                (self.launch_button, QtWidgets.QStyle.SP_MediaPlay),
+            ]
+            for btn, sp in mapping:
+                try:
+                    btn.setIcon(style.standardIcon(sp))
+                    # Smaller icons for bottom bar buttons
+                    if btn in (self.configuration_button, self.launch_button):
+                        btn.setIconSize(QtCore.QSize(22, 22))
+                    else:
+                        btn.setIconSize(icon_size)
+                    if isinstance(btn, QtWidgets.QToolButton):
+                        btn.setToolButtonStyle(QtCore.Qt.ToolButtonTextUnderIcon)
+                        # Normalize minimum size for tool buttons
+                        btn.setMinimumSize(QtCore.QSize(140, 110))
+                except Exception:
+                    pass
+            try:
+                # Re-layout after icon size update
+                self._layout_action_buttons()
+            except Exception:
+                pass
+        except Exception:
+            pass
         self.refresh_table_only()
 
     def _update_version_filter_visibility(self):
@@ -3645,6 +3953,54 @@ class ModManagerApp(QtWidgets.QWidget):
             if widget is not None:
                 widget.setVisible(enabled)
                 widget.setEnabled(enabled)
+
+    def _read_game_version_build(self):
+        version = ""
+        build = ""
+        try:
+            cache_dir = str(self.settings.get("sims_cache_directory", "") or "").strip()
+            if not cache_dir:
+                return version, build
+            config_path = os.path.join(cache_dir, "config.log")
+            if not os.path.isfile(config_path):
+                return version, build
+            with open(config_path, "r", encoding="utf-8", errors="ignore") as fh:
+                for raw in fh:
+                    line = raw.strip()
+                    if not version and line.lower().startswith("version:"):
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            candidate = parts[1].strip()
+                            if candidate:
+                                version = candidate
+                    elif not build and line.lower().startswith("build:"):
+                        parts = line.split(":", 1)
+                        if len(parts) == 2:
+                            candidate = parts[1].strip()
+                            if candidate:
+                                build = candidate
+                    if version and build:
+                        break
+        except Exception:
+            pass
+        return version, build
+
+    def _update_game_info_label(self):
+        try:
+            version, build = self._read_game_version_build()
+            if version or build:
+                display = f"Version: {version or '—'}    Build: {build or '—'}"
+                self.game_info_label.setText(display)
+                self.game_info_label.setVisible(True)
+            else:
+                self.game_info_label.setText("")
+                self.game_info_label.setVisible(True)
+        except Exception:
+            if hasattr(self, "game_info_label"):
+                try:
+                    self.game_info_label.setText("")
+                except Exception:
+                    pass
 
     def on_version_filter_changed(self):
         if not hasattr(self, "version_start_combo"):
@@ -3770,6 +4126,10 @@ class ModManagerApp(QtWidgets.QWidget):
             pass
         self.update_mod_directory_label()
         self.update_launch_button_state()
+        try:
+            self._update_game_info_label()
+        except Exception:
+            pass
 
         # Apply log level change immediately (if provided)
         if log_level:
@@ -4546,22 +4906,64 @@ if __name__ == "__main__":
             p = QtGui.QPainter(pix)
             try:
                 p.setRenderHint(QtGui.QPainter.Antialiasing)
-                # Clear background
-                p.fillRect(pix.rect(), QtGui.QColor("#263238"))
+                # Background gradient
+                r = pix.rect()
+                grad = QtGui.QLinearGradient(r.topLeft(), r.bottomRight())
+                grad.setColorAt(0.0, QtGui.QColor("#1b5e20"))
+                grad.setColorAt(0.4, QtGui.QColor("#004d40"))
+                grad.setColorAt(1.0, QtGui.QColor("#263238"))
+                p.fillRect(r, QtGui.QBrush(grad))
+
+                # Soft vignette
+                vignette = QtGui.QRadialGradient(r.center(), max(r.width(), r.height()) * 0.75)
+                vignette.setColorAt(0.0, QtGui.QColor(0, 0, 0, 0))
+                vignette.setColorAt(1.0, QtGui.QColor(0, 0, 0, 110))
+                p.fillRect(r, QtGui.QBrush(vignette))
+
+                # Plumbob-like diamond (surprise!)
+                cx = r.center().x()
+                cy = int(r.height() * 0.44)
+                w = max(100, int(r.width() * 0.22))
+                h = max(140, int(r.height() * 0.42))
+                path = QtGui.QPainterPath()
+                path.moveTo(cx, cy - h // 2)
+                path.lineTo(cx + w // 2, cy)
+                path.lineTo(cx, cy + h // 2)
+                path.lineTo(cx - w // 2, cy)
+                path.closeSubpath()
+
+                g = QtGui.QLinearGradient(cx, cy - h // 2, cx, cy + h // 2)
+                g.setColorAt(0.0, QtGui.QColor("#00e676"))
+                g.setColorAt(0.5, QtGui.QColor("#1de9b6"))
+                g.setColorAt(1.0, QtGui.QColor("#00c853"))
+                p.setPen(QtGui.QPen(QtGui.QColor("#004d40"), 2))
+                p.setBrush(QtGui.QBrush(g))
+                p.drawPath(path)
+
+                # Glow around diamond
+                glow = QtGui.QRadialGradient(QtCore.QPointF(cx, cy), h * 0.9)
+                glow.setColorAt(0.0, QtGui.QColor(0, 255, 170, 70))
+                glow.setColorAt(1.0, QtGui.QColor(0, 0, 0, 0))
+                p.setBrush(QtGui.QBrush(glow))
+                p.setPen(QtCore.Qt.NoPen)
+                p.drawEllipse(QtCore.QRectF(cx - w, cy - w, w * 2, w * 2))
+
                 # Title
                 font = QtGui.QFont()
-                font.setPointSize(16)
+                font.setPointSize(18)
                 font.setBold(True)
                 p.setFont(font)
-                p.setPen(QtGui.QColor("#ffffff"))
-                title_rect = pix.rect().adjusted(24, 24, -24, -pix.height()//2)
-                p.drawText(title_rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignVCenter | QtCore.Qt.TextWordWrap, self._title)
+                p.setPen(QtGui.QColor("#e0f2f1"))
+                title_rect = QtCore.QRect(r.left() + 24, r.top() + 20, r.width() - 48, max(20, int(cy - h // 2) - 40))
+                p.drawText(title_rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignBottom | QtCore.Qt.TextWordWrap, self._title)
+
                 # Message
                 font2 = QtGui.QFont()
                 font2.setPointSize(11)
                 p.setFont(font2)
-                p.setPen(QtGui.QColor("#cfd8dc"))
-                msg_rect = pix.rect().adjusted(24, pix.height()//2 - 20, -24, -24)
+                p.setPen(QtGui.QColor("#c8e6c9"))
+                msg_top = min(r.bottom() - 60, int(cy + h // 2) + 20)
+                msg_rect = QtCore.QRect(r.left() + 24, msg_top, r.width() - 48, r.bottom() - msg_top - 24)
                 p.drawText(msg_rect, QtCore.Qt.AlignHCenter | QtCore.Qt.AlignTop | QtCore.Qt.TextWordWrap, self._message)
             finally:
                 p.end()
