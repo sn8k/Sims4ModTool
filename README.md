@@ -1,17 +1,18 @@
 # Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.13
-- **Dernière mise à jour :** 21/10/2025 01:27 UTC
+- **Version de l'application :** v3.18
+- **Dernière mise à jour :** 22/10/2025 08:00 UTC
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
 - Analyse récursive du dossier de mods avec détection des paires `.package` / `.ts4script`.
-- Calcul automatique de la colonne **Version** à partir du nom des fichiers `.ts4script` se terminant par le motif `_v_<numéro>`.
-- Marquage des mods ignorés (persisté dans `ignorelist.txt`) et filtres dynamiques pour limiter l'affichage aux plages de patch souhaitées.
+- Estimation automatique de la colonne **Version** à partir de la dernière date connue du mod et de la table de sorties Sims 4.
+- Marquage des mods ignorés (persisté dans `ignorelist.txt`) et filtres dynamiques configurables via plages de versions (sélection des patchs de départ et d'arrivée).
+- Affichage sélectif des mods contenant des fichiers `.package` et/ou `.ts4script` grâce aux cases à cocher cumulables **Show Package** et **Show TS4Script**.
 - Export des résultats au format Excel (`.xlsx`) avec conservation de toutes les colonnes visibles.
 - Nettoyage guidé du cache Sims 4 via le bouton **Clear Sims4 Cache**.
-- Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement.
+- Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement et possibilité d'exclure certains fichiers par nom.
 - Lancement direct de `TS4_X64.exe` avec arguments optionnels.
 
 ## Prérequis
@@ -44,15 +45,17 @@ Ouvrez la fenêtre **Configuration** pour définir :
 - Le dossier de backups où seront copiés les logs.
 - Le chemin complet vers `TS4_X64.exe` ainsi que les arguments additionnels éventuels.
 - Les extensions supplémentaires de journaux à inclure lors de l'extraction (en plus de `.log` et `.txt`).
+- Les fichiers de logs à ignorer lors de la collecte.
+- Les versions de patch disponibles pour le filtrage (affichage de la liste et ajout via le bouton **Add update info**).
 
 Les paramètres sont enregistrés dans `settings.json` dès la sauvegarde de la fenêtre.
 
 ## Lecture du tableau des mods
 La table principale affiche une ligne par mod détecté avec les colonnes suivantes :
-1. **État** — `X` si un duo `.package`/`.ts4script` est présent, `MP` pour `.package` seul, `MS` pour `.ts4script` seul.
+1. **État** — `X` si un duo `.package`/`.ts4script` est présent, `MS` lorsqu'il manque le `.ts4script`, `MP` lorsqu'il manque le `.package`.
 2. **Fichier .package** et **Date .package**.
 3. **Fichier .ts4script** et **Date .ts4script**.
-4. **Version** — déduite du nom du fichier `.ts4script` (ex. `MonMod_v_1.02.ts4script` → `1.02`).
+4. **Version** — estimée grâce à la date la plus récente du mod et aux informations de patch connues (ex. un fichier daté du 10/10/2025 sera associé au patch `1.118.257.1020`).
 5. **Ignoré** — cochez pour masquer un mod lors des prochains scans (persisté dans `ignorelist.txt`).
 
 Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de supprimer ou de lancer une recherche Google sur le mod sélectionné.
@@ -63,9 +66,10 @@ Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de su
 - **Clear Sims4 Cache** : supprime les fichiers/dossiers de cache connus et affiche un compte rendu.
 - **Grab Logs** : déplace les fichiers journaux trouvés dans le dossier des mods vers un sous-dossier horodaté du dossier de backups.
 - **Launch Sims 4** : exécute `TS4_X64.exe` avec les arguments configurés (bouton désactivé si le chemin est invalide).
+- **Kill Sims 4** : termine le processus `TS4_x64.exe` en cours d'exécution.
 
 ## Gestion des journaux
-Les fichiers dont l'extension correspond à `.log`, `.txt` ou toute extension supplémentaire configurée sont déplacés dans un dossier nommé `Logs_YYYYMMDD_HHMMSS` sous le dossier de backups. L'arborescence relative depuis le dossier de mods est conservée et l'explorateur est ouvert automatiquement à la fin de l'opération.
+Les fichiers dont l'extension correspond à `.log`, `.txt` ou toute extension supplémentaire configurée sont déplacés dans un dossier nommé `Logs_YYYYMMDD_HHMMSS` sous le dossier de backups (sauf ceux dont le nom figure dans la liste d'exclusion configurée). L'arborescence relative depuis le dossier de mods est conservée et l'explorateur est ouvert automatiquement à la fin de l'opération.
 
 ## Nettoyage du cache Sims 4
 Le bouton **Clear Sims4 Cache** supprime :

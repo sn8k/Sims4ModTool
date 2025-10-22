@@ -4,27 +4,129 @@ import json
 import shutil
 import shlex
 import re
+import subprocess
+from collections import OrderedDict
 from functools import partial
 from urllib.parse import quote_plus
 from PyQt5 import QtWidgets, QtCore, QtGui
-from datetime import datetime
+from datetime import datetime, time
 from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
-APP_VERSION = "v3.15"
-APP_VERSION_DATE = "21/10/2025 16:47 UTC"
+VERSION_RELEASE_PATH = "version_release.json"
+APP_VERSION = "v3.18"
+APP_VERSION_DATE = "22/10/2025 08:00 UTC"
 
 
-VERSION_PATTERN = re.compile(r"_v_([0-9]+(?:[._-][0-9A-Za-z]+)*)$", re.IGNORECASE)
+DEFAULT_VERSION_RELEASES = [
+    {"version": "1.109.185.1030", "release_date": "2024-09-18"},
+    {"version": "1.110.265.1030", "release_date": "2024-10-22"},
+    {"version": "1.110.311.1020", "release_date": "2024-11-07"},
+    {"version": "1.111.102.1030", "release_date": "2024-12-03"},
+    {"version": "1.115.216.1030", "release_date": "2025-05-27"},
+    {"version": "1.115.253.1020", "release_date": "2025-06-17"},
+    {"version": "1.116.202.1030", "release_date": "2025-07-01"},
+    {"version": "1.116.223.1030", "release_date": "2025-07-10"},
+    {"version": "1.116.232.1030", "release_date": "2025-07-16"},
+    {"version": "1.116.240.1020", "release_date": "2025-07-29"},
+    {"version": "1.117.227.1030", "release_date": "2025-08-19"},
+    {"version": "1.117.244.1020", "release_date": "2025-09-04"},
+    {"version": "1.118.242.1030", "release_date": "2025-09-18"},
+    {"version": "1.118.257.1020", "release_date": "2025-10-02"},
+]
 
 
-def extract_version_from_script_name(script_name):
-    if not script_name:
+def parse_release_date(date_str):
+    if not date_str:
+        return None
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(date_str, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def format_release_date(date_obj):
+    if not date_obj:
         return ""
-    base_name = os.path.splitext(script_name)[0]
-    match = VERSION_PATTERN.search(base_name)
-    return match.group(1) if match else ""
+    return date_obj.strftime("%d/%m/%Y")
+
+
+def load_custom_version_releases(path=VERSION_RELEASE_PATH):
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+    releases = {}
+    if isinstance(data, dict):
+        items = data.items()
+    elif isinstance(data, list):
+        items = ((entry.get("version"), entry.get("release_date")) for entry in data)
+    else:
+        return {}
+
+    for version, date_str in items:
+        if not version:
+            continue
+        parsed = parse_release_date(date_str)
+        if parsed is None:
+            continue
+        releases[str(version)] = parsed
+    return releases
+
+
+def save_custom_version_releases(releases, path=VERSION_RELEASE_PATH):
+    entries = [
+        {"version": version, "release_date": date.isoformat()}
+        for version, date in sorted(releases.items(), key=lambda item: (item[1], item[0]))
+    ]
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(entries, f, indent=4, ensure_ascii=False)
+
+
+def merge_version_releases(custom_releases):
+    merged = {}
+    for entry in DEFAULT_VERSION_RELEASES:
+        version = entry.get("version")
+        date_str = entry.get("release_date")
+        if not version or not date_str:
+            continue
+        parsed = parse_release_date(date_str)
+        if parsed is None:
+            continue
+        merged[version] = parsed
+    for version, date_obj in custom_releases.items():
+        if not version or date_obj is None:
+            continue
+        merged[version] = date_obj
+    sorted_items = sorted(merged.items(), key=lambda item: (item[1], item[0]))
+    return OrderedDict(sorted_items)
+
+
+def estimate_version_from_dates(package_date, script_date, version_releases):
+    candidates = [value for value in (package_date, script_date) if value is not None]
+    if not candidates:
+        return ""
+    latest_datetime = max(candidates)
+    latest_date = latest_datetime.date()
+    estimated_version = ""
+    for version, release_date in version_releases.items():
+        if release_date <= latest_date:
+            estimated_version = version
+        elif not estimated_version:
+            return version
+        else:
+            break
+    return estimated_version
 
 
 def format_datetime(value):
@@ -57,24 +159,12 @@ def load_settings(path=SETTINGS_PATH):
         with open(path, "r", encoding="utf-8") as f:
             settings = json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
-        settings = {
-            "hide_post_118": True,
-            "filter_116_to_118": True,
-            "filter_package_and_ts4script": False,
-            "mod_directory": "",
-            "sims_cache_directory": "",
-            "backups_directory": "",
-            "xls_file_path": "",
-            "sims_executable_path": "",
-            "sims_executable_arguments": "",
-            "log_extra_extensions": [],
-            "ignored_mods": [],  # Liste des mods ignorés
-            "show_ignored": False  # Contrôle si les mods ignorés doivent être affichés
-        }
+        settings = {}
     defaults = {
-        "hide_post_118": True,
-        "filter_116_to_118": True,
-        "filter_package_and_ts4script": False,
+        "version_filter_start": "",
+        "version_filter_end": "",
+        "show_package_mods": True,
+        "show_ts4script_mods": True,
         "mod_directory": "",
         "sims_cache_directory": "",
         "backups_directory": "",
@@ -82,11 +172,23 @@ def load_settings(path=SETTINGS_PATH):
         "sims_executable_path": "",
         "sims_executable_arguments": "",
         "log_extra_extensions": [],
+        "grab_logs_ignore_files": [],
         "ignored_mods": [],
         "show_ignored": False,
     }
     for key, value in defaults.items():
         settings.setdefault(key, value)
+    legacy_combined_filter = settings.pop("filter_package_and_ts4script", None)
+    if legacy_combined_filter is True:
+        settings["show_package_mods"] = True
+        settings["show_ts4script_mods"] = True
+    legacy_hide_post_118 = settings.pop("hide_post_118", None)
+    legacy_filter_range = settings.pop("filter_116_to_118", None)
+    if not settings.get("version_filter_start") and legacy_filter_range:
+        settings["version_filter_start"] = "1.116.202.1030"
+    if not settings.get("version_filter_end") and (legacy_filter_range or legacy_hide_post_118):
+        settings["version_filter_end"] = "1.118.242.1030"
+
     if isinstance(settings.get("log_extra_extensions"), str):
         settings["log_extra_extensions"] = [part.strip() for part in settings["log_extra_extensions"].split(",") if part.strip()]
     extra_extensions = []
@@ -96,6 +198,24 @@ def load_settings(path=SETTINGS_PATH):
         ext = entry if entry.startswith(".") else f".{entry}"
         extra_extensions.append(ext.lower())
     settings["log_extra_extensions"] = sorted(set(extra_extensions))
+
+    ignore_entries = settings.get("grab_logs_ignore_files", [])
+    if isinstance(ignore_entries, str):
+        raw_parts = re.split(r"[,;\n]+", ignore_entries)
+    else:
+        raw_parts = ignore_entries
+    normalized_ignore = []
+    seen = set()
+    for part in raw_parts:
+        if not part:
+            continue
+        cleaned = str(part).strip()
+        if not cleaned or cleaned.lower() in seen:
+            continue
+        seen.add(cleaned.lower())
+        normalized_ignore.append(cleaned)
+    settings["grab_logs_ignore_files"] = normalized_ignore
+
     ignored_from_file = load_ignore_list()
     if not ignored_from_file and settings.get("ignored_mods"):
         ignored_from_file = settings.get("ignored_mods", [])
@@ -119,15 +239,22 @@ def scan_directory(directory):
                 ts4script_files[file] = full_path
     return package_files, ts4script_files
 
-def generate_data_rows(directory, settings):
+def generate_data_rows(directory, settings, version_releases):
     package_files, ts4script_files = scan_directory(directory)
-    filter_post_118_date = datetime(2025, 9, 18)
-    filter_116_start_date = datetime(2025, 7, 1)
-    filter_118_end_date = datetime(2025, 9, 18)
+    start_version = settings.get("version_filter_start") or ""
+    end_version = settings.get("version_filter_end") or ""
+    start_date = version_releases.get(start_version)
+    end_date = version_releases.get(end_version)
+    start_limit = datetime.combine(start_date, time.min) if start_date else None
+    end_limit = datetime.combine(end_date, time.max) if end_date else None
+    if start_limit and end_limit and start_limit > end_limit:
+        start_limit, end_limit = end_limit, start_limit
 
     data_rows = []
     ignored_mods = set(settings.get("ignored_mods", []))
     show_ignored = settings.get("show_ignored", False)
+    show_packages = settings.get("show_package_mods", True)
+    show_scripts = settings.get("show_ts4script_mods", True)
 
     # .package files
     for pkg, pkg_path in package_files.items():
@@ -137,12 +264,16 @@ def generate_data_rows(directory, settings):
         script_path = ts4script_files.get(script_file)
         script_date = get_file_date(script_path) if script_path else None
 
+        mod_latest_date = max((date for date in (pkg_date, script_date) if date is not None), default=None)
+
         # Appliquer filtres
-        if settings["hide_post_118"] and pkg_date > filter_post_118_date:
+        if end_limit and mod_latest_date and mod_latest_date > end_limit:
             continue
-        if settings["filter_116_to_118"] and not (filter_116_start_date <= pkg_date <= filter_118_end_date):
+        if start_limit and mod_latest_date and mod_latest_date < start_limit:
             continue
-        if settings["filter_package_and_ts4script"] and not script_path:
+        has_package = True
+        has_script = script_path is not None
+        if not ((has_package and show_packages) or (has_script and show_scripts)):
             continue
 
         candidates = [name for name in (pkg, script_file if script_path else None) if name]
@@ -150,10 +281,8 @@ def generate_data_rows(directory, settings):
         if ignored and not show_ignored:
             continue
 
-        status = "MP"
-        if script_path:
-            status = "X"
-        version = extract_version_from_script_name(script_file if script_path else "")
+        status = "X" if script_path else "MS"
+        version = estimate_version_from_dates(pkg_date, script_date, version_releases)
 
         data_rows.append({
             "status": status,
@@ -176,19 +305,19 @@ def generate_data_rows(directory, settings):
 
         script_date = get_file_date(script_path)
 
-        if settings["hide_post_118"] and script_date > filter_post_118_date:
+        if end_limit and script_date and script_date > end_limit:
             continue
-        if settings["filter_116_to_118"] and not (filter_116_start_date <= script_date <= filter_118_end_date):
+        if start_limit and script_date and script_date < start_limit:
             continue
-        if settings["filter_package_and_ts4script"]:
+        if not show_scripts:
             continue
         candidates = [script]
         ignored = any(name in ignored_mods for name in candidates)
         if ignored and not show_ignored:
             continue
-        status = "MS"
+        status = "MP"
 
-        version = extract_version_from_script_name(script)
+        version = estimate_version_from_dates(None, script_date, version_releases)
 
         data_rows.append({
             "status": status,
@@ -226,6 +355,38 @@ def export_to_excel(save_path, data_rows):
             ws.cell(row=row_idx, column=col_idx, value=value)
 
     wb.save(save_path)
+
+
+class AddUpdateDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Ajouter une mise à jour")
+        self.setModal(True)
+
+        layout = QtWidgets.QFormLayout(self)
+        self.version_edit = QtWidgets.QLineEdit(self)
+        self.version_edit.setPlaceholderText("1.118.257.1020")
+        self.date_edit = QtWidgets.QDateEdit(self)
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDisplayFormat("dd/MM/yyyy")
+        self.date_edit.setDate(QtCore.QDate.currentDate())
+
+        layout.addRow("Numéro de version :", self.version_edit)
+        layout.addRow("Date de sortie :", self.date_edit)
+
+        button_box = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel, self)
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        layout.addWidget(button_box)
+
+    def accept(self):
+        if not self.version_edit.text().strip():
+            QtWidgets.QMessageBox.warning(self, "Informations manquantes", "Indique un numéro de version valide.")
+            return
+        super().accept()
+
+    def get_values(self):
+        return self.version_edit.text().strip(), self.date_edit.date()
 
 
 class ConfigurationDialog(QtWidgets.QDialog):
@@ -300,6 +461,30 @@ class ConfigurationDialog(QtWidgets.QDialog):
         logs_ext_layout.addWidget(self.log_extensions_edit)
         layout.addLayout(logs_ext_layout)
 
+        self.grab_logs_ignore_edit = QtWidgets.QPlainTextEdit(self)
+        self.grab_logs_ignore_edit.setPlaceholderText("last_crash.txt\nExceptionLog.txt")
+        ignore_lines = "\n".join(settings.get("grab_logs_ignore_files", []))
+        self.grab_logs_ignore_edit.setPlainText(ignore_lines)
+        self.grab_logs_ignore_edit.setFixedHeight(100)
+
+        ignore_layout = QtWidgets.QVBoxLayout()
+        ignore_layout.addWidget(QtWidgets.QLabel("Fichiers de logs à ignorer (un par ligne ou séparés par des virgules) :"))
+        ignore_layout.addWidget(self.grab_logs_ignore_edit)
+        layout.addLayout(ignore_layout)
+
+        version_group = QtWidgets.QGroupBox("Gestion des versions de patch", self)
+        version_layout = QtWidgets.QVBoxLayout(version_group)
+        self.version_list_widget = QtWidgets.QListWidget(version_group)
+        self.version_list_widget.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        self.version_list_widget.setMinimumHeight(150)
+        version_layout.addWidget(self.version_list_widget)
+        self.add_version_button = QtWidgets.QPushButton("Add update info", version_group)
+        self.add_version_button.clicked.connect(self._open_add_version_dialog)
+        version_layout.addWidget(self.add_version_button)
+        layout.addWidget(version_group)
+
+        self._refresh_version_list()
+
         button_box = QtWidgets.QDialogButtonBox()
         save_button = button_box.addButton("Sauvegarder", QtWidgets.QDialogButtonBox.AcceptRole)
         cancel_button = button_box.addButton(QtWidgets.QDialogButtonBox.Cancel)
@@ -308,6 +493,29 @@ class ConfigurationDialog(QtWidgets.QDialog):
         layout.addWidget(button_box)
 
         self.setLayout(layout)
+
+    def _refresh_version_list(self):
+        if not hasattr(self, "version_list_widget"):
+            return
+        self.version_list_widget.clear()
+        if self._parent is None:
+            return
+        for version, release_date in self._parent.get_version_entries():
+            self.version_list_widget.addItem(f"{version} – {format_release_date(release_date)}")
+
+    def _open_add_version_dialog(self):
+        if self._parent is None:
+            return
+        dialog = AddUpdateDialog(self)
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+        version, release_date = dialog.get_values()
+        success, message = self._parent.add_version_release(version, release_date)
+        if success:
+            QtWidgets.QMessageBox.information(self, "Version ajoutée", message)
+            self._refresh_version_list()
+        else:
+            QtWidgets.QMessageBox.warning(self, "Ajout impossible", message)
 
     def _browse_directory(self, target_edit):
         folder = QtWidgets.QFileDialog.getExistingDirectory(self, "Choisir un dossier")
@@ -331,6 +539,7 @@ class ConfigurationDialog(QtWidgets.QDialog):
         sims_executable_path = self.sims_executable_edit.text().strip()
         sims_executable_arguments = self.sims_arguments_edit.text().strip()
         log_extensions_text = self.log_extensions_edit.text().strip()
+        ignore_text = self.grab_logs_ignore_edit.toPlainText()
 
         extra_extensions = []
         if log_extensions_text:
@@ -342,6 +551,19 @@ class ConfigurationDialog(QtWidgets.QDialog):
                     cleaned = f".{cleaned}"
                 extra_extensions.append(cleaned.lower())
 
+        ignore_files = []
+        seen_ignore = set()
+        if ignore_text:
+            for part in re.split(r"[,;\n]+", ignore_text):
+                cleaned = part.strip()
+                if not cleaned:
+                    continue
+                key = cleaned.lower()
+                if key in seen_ignore:
+                    continue
+                seen_ignore.add(key)
+                ignore_files.append(cleaned)
+
         if self._parent is not None:
             self._parent.apply_configuration(
                 mod_directory,
@@ -350,6 +572,7 @@ class ConfigurationDialog(QtWidgets.QDialog):
                 sims_executable_path,
                 sims_executable_arguments,
                 sorted(set(extra_extensions)),
+                ignore_files,
             )
         self.accept()
 
@@ -362,6 +585,8 @@ class ModManagerApp(QtWidgets.QWidget):
         self.setGeometry(100, 100, 800, 600)
 
         self.settings = load_settings()
+        self.custom_version_releases = load_custom_version_releases()
+        self.version_releases = merge_version_releases(self.custom_version_releases)
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = ""
         self.all_data_rows = []
@@ -403,29 +628,39 @@ class ModManagerApp(QtWidgets.QWidget):
         self.update_mod_directory_label()
 
         # Filtrage
-        self.hide_post_118_checkbox = QtWidgets.QCheckBox("Masquer mods post‑patch 1.118", self)
-        self.hide_post_118_checkbox.setChecked(self.settings.get("hide_post_118", True))
-        self.hide_post_118_checkbox.toggled.connect(lambda: self.toggle_setting("hide_post_118"))
+        version_range_layout = QtWidgets.QHBoxLayout()
+        version_range_layout.addWidget(QtWidgets.QLabel("Version de départ :", self))
+        self.version_start_combo = QtWidgets.QComboBox(self)
+        self.version_start_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        version_range_layout.addWidget(self.version_start_combo)
+        version_range_layout.addWidget(QtWidgets.QLabel("Version d'arrivée :", self))
+        self.version_end_combo = QtWidgets.QComboBox(self)
+        self.version_end_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
+        version_range_layout.addWidget(self.version_end_combo)
 
-        self.filter_116_to_118_checkbox = QtWidgets.QCheckBox("Uniquement entre patch 1.116‑1.118", self)
-        self.filter_116_to_118_checkbox.setChecked(self.settings.get("filter_116_to_118", True))
-        self.filter_116_to_118_checkbox.toggled.connect(lambda: self.toggle_setting("filter_116_to_118"))
+        self.show_package_mods_checkbox = QtWidgets.QCheckBox("Show Package", self)
+        self.show_package_mods_checkbox.setChecked(self.settings.get("show_package_mods", True))
+        self.show_package_mods_checkbox.toggled.connect(lambda: self.toggle_setting("show_package_mods"))
 
-        self.filter_package_and_ts4script_checkbox = QtWidgets.QCheckBox("Uniquement mods avec .package + .ts4script", self)
-        self.filter_package_and_ts4script_checkbox.setChecked(self.settings.get("filter_package_and_ts4script", False))
-        self.filter_package_and_ts4script_checkbox.toggled.connect(lambda: self.toggle_setting("filter_package_and_ts4script"))
+        self.show_ts4script_mods_checkbox = QtWidgets.QCheckBox("Show TS4Script", self)
+        self.show_ts4script_mods_checkbox.setChecked(self.settings.get("show_ts4script_mods", True))
+        self.show_ts4script_mods_checkbox.toggled.connect(lambda: self.toggle_setting("show_ts4script_mods"))
 
         self.show_ignored_checkbox = QtWidgets.QCheckBox("Afficher les mods ignorés", self)
         self.show_ignored_checkbox.setChecked(self.settings.get("show_ignored", False))
         self.show_ignored_checkbox.toggled.connect(lambda: self.toggle_show_ignored())
 
         filter_layout = QtWidgets.QVBoxLayout()
-        filter_layout.addWidget(self.hide_post_118_checkbox)
-        filter_layout.addWidget(self.filter_116_to_118_checkbox)
-        filter_layout.addWidget(self.filter_package_and_ts4script_checkbox)
+        filter_layout.addLayout(version_range_layout)
+        filter_layout.addWidget(self.show_package_mods_checkbox)
+        filter_layout.addWidget(self.show_ts4script_mods_checkbox)
         filter_layout.addWidget(self.show_ignored_checkbox)
 
         layout.addLayout(filter_layout)
+
+        self.populate_version_combos()
+        self.version_start_combo.currentIndexChanged.connect(self.on_version_filter_changed)
+        self.version_end_combo.currentIndexChanged.connect(self.on_version_filter_changed)
 
         search_layout = QtWidgets.QHBoxLayout()
         search_layout.addWidget(QtWidgets.QLabel("Recherche mod :"))
@@ -435,6 +670,10 @@ class ModManagerApp(QtWidgets.QWidget):
         search_layout.addWidget(self.search_edit)
 
         layout.addLayout(search_layout)
+
+        self.scan_status_label = QtWidgets.QLabel("", self)
+        self.scan_status_label.setVisible(False)
+        layout.addWidget(self.scan_status_label)
 
         # Table des mods
         self.table = QtWidgets.QTableWidget(self)
@@ -484,6 +723,9 @@ class ModManagerApp(QtWidgets.QWidget):
         self.launch_button = QtWidgets.QPushButton("Launch Sims 4", self)
         self.launch_button.clicked.connect(self.launch_sims4)
 
+        self.kill_button = QtWidgets.QPushButton("Kill Sims 4", self)
+        self.kill_button.clicked.connect(self.kill_sims4)
+
         self.tools_button = QtWidgets.QPushButton("Tools", self)
         self.tools_button.clicked.connect(self.open_tools_dialog)
 
@@ -495,12 +737,87 @@ class ModManagerApp(QtWidgets.QWidget):
         button_layout.addWidget(self.clear_cache_button)
         button_layout.addWidget(self.grab_logs_button)
         button_layout.addWidget(self.launch_button)
+        button_layout.addWidget(self.kill_button)
 
         layout.addLayout(button_layout)
 
         # Final
         self.setLayout(layout)
         self.update_launch_button_state()
+
+    def _update_scan_status(self, message):
+        if hasattr(self, "scan_status_label") and self.scan_status_label is not None:
+            self.scan_status_label.setText(message)
+            self.scan_status_label.setVisible(bool(message))
+            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.AllEvents, 50)
+
+    def populate_version_combos(self):
+        if not hasattr(self, "version_start_combo"):
+            return
+        entries = list(self.version_releases.items())
+        combo_map = (
+            (self.version_start_combo, "version_filter_start"),
+            (self.version_end_combo, "version_filter_end"),
+        )
+        for combo, setting_key in combo_map:
+            current_value = self.settings.get(setting_key, "") or ""
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("Aucune (pas de limite)", "")
+            for version, release_date in entries:
+                combo.addItem(f"{version} – {format_release_date(release_date)}", version)
+            index = combo.findData(current_value)
+            combo.setCurrentIndex(index if index != -1 else 0)
+            combo.blockSignals(False)
+
+    def on_version_filter_changed(self):
+        if not hasattr(self, "version_start_combo"):
+            return
+        start_idx = self.version_start_combo.currentIndex()
+        end_idx = self.version_end_combo.currentIndex()
+        sender = self.sender()
+        if start_idx > 0 and end_idx > 0 and start_idx > end_idx:
+            if sender is self.version_start_combo:
+                self.version_end_combo.blockSignals(True)
+                self.version_end_combo.setCurrentIndex(start_idx)
+                self.version_end_combo.blockSignals(False)
+            else:
+                self.version_start_combo.blockSignals(True)
+                self.version_start_combo.setCurrentIndex(end_idx)
+                self.version_start_combo.blockSignals(False)
+            start_idx = self.version_start_combo.currentIndex()
+            end_idx = self.version_end_combo.currentIndex()
+
+        start_value = self.version_start_combo.itemData(start_idx)
+        end_value = self.version_end_combo.itemData(end_idx)
+        self.settings["version_filter_start"] = start_value or ""
+        self.settings["version_filter_end"] = end_value or ""
+        save_settings(self.settings)
+        self.refresh_table_only()
+
+    def get_version_entries(self):
+        return list(self.version_releases.items())
+
+    def add_version_release(self, version, release_date):
+        normalized_version = str(version).strip()
+        if not normalized_version:
+            return False, "Le numéro de version est obligatoire."
+
+        if hasattr(release_date, "toPyDate"):
+            release_date = release_date.toPyDate()
+
+        if release_date is None:
+            return False, "La date de sortie est obligatoire."
+
+        if normalized_version in self.version_releases:
+            return False, "Cette version existe déjà."
+
+        self.custom_version_releases[normalized_version] = release_date
+        save_custom_version_releases(self.custom_version_releases)
+        self.version_releases = merge_version_releases(self.custom_version_releases)
+        self.populate_version_combos()
+        self.refresh_table_only()
+        return True, f"Version {normalized_version} ajoutée."
 
     def toggle_setting(self, key):
         self.settings[key] = getattr(self, f"{key}_checkbox").isChecked()
@@ -521,7 +838,7 @@ class ModManagerApp(QtWidgets.QWidget):
         dialog = ConfigurationDialog(self, dict(self.settings))
         dialog.exec_()
 
-    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions):
+    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files):
         previous_mod_directory = self.settings.get("mod_directory", "")
         self.settings["mod_directory"] = mod_directory
         self.settings["sims_cache_directory"] = cache_directory
@@ -529,6 +846,7 @@ class ModManagerApp(QtWidgets.QWidget):
         self.settings["sims_executable_path"] = sims_executable_path
         self.settings["sims_executable_arguments"] = sims_executable_arguments
         self.settings["log_extra_extensions"] = sorted(set(log_extra_extensions))
+        self.settings["grab_logs_ignore_files"] = list(grab_logs_ignore_files)
         save_settings(self.settings)
         self.update_mod_directory_label()
         self.update_launch_button_state()
@@ -548,14 +866,18 @@ class ModManagerApp(QtWidgets.QWidget):
         self.update_mod_directory_label()
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = folder
-        rows = generate_data_rows(folder, self.settings)
+        self._update_scan_status("Scan en cours...")
+        rows = generate_data_rows(folder, self.settings, self.version_releases)
         self.populate_table(rows)
+        self._update_scan_status("")
 
     def refresh_table_only(self):
         if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
             self.ignored_mods = set(self.settings.get("ignored_mods", []))
-            rows = generate_data_rows(self.last_scanned_directory, self.settings)
+            self._update_scan_status("Scan en cours...")
+            rows = generate_data_rows(self.last_scanned_directory, self.settings, self.version_releases)
             self.populate_table(rows)
+            self._update_scan_status("")
 
     def clear_sims4_cache(self):
         cache_directory = self.settings.get("sims_cache_directory", "")
@@ -617,6 +939,7 @@ class ModManagerApp(QtWidgets.QWidget):
 
         extensions = {".log", ".txt"}
         extensions.update(self.settings.get("log_extra_extensions", []))
+        ignored_log_names = {name.lower() for name in self.settings.get("grab_logs_ignore_files", []) if name}
 
         normalized_mod_dir = os.path.normpath(mod_directory)
         backups_directory_norm = os.path.normpath(backups_directory)
@@ -625,6 +948,8 @@ class ModManagerApp(QtWidgets.QWidget):
         for current_root, dirs, files in os.walk(normalized_mod_dir):
             dirs[:] = [d for d in dirs if os.path.normpath(os.path.join(current_root, d)) != backups_directory_norm]
             for file_name in files:
+                if file_name.lower() in ignored_log_names:
+                    continue
                 _, ext = os.path.splitext(file_name)
                 if ext.lower() in extensions:
                     file_path = os.path.join(current_root, file_name)
@@ -703,6 +1028,36 @@ class ModManagerApp(QtWidgets.QWidget):
                 raise OSError("le processus n'a pas pu être démarré")
         except OSError as exc:
             QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible de lancer Sims 4 : {exc}")
+
+    def kill_sims4(self):
+        process_name = "TS4_x64.exe"
+        if sys.platform.startswith("win"):
+            command = ["taskkill", "/F", "/IM", process_name]
+            missing_command_message = "La commande taskkill est introuvable."
+        else:
+            command = ["pkill", "-f", process_name]
+            missing_command_message = "La commande pkill est introuvable."
+
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True)
+        except FileNotFoundError:
+            QtWidgets.QMessageBox.critical(self, "Commande introuvable", missing_command_message)
+            return
+
+        if completed.returncode == 0:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Sims 4 arrêté",
+                "Le processus TS4_x64.exe a été arrêté avec succès.",
+            )
+            return
+
+        output = completed.stderr.strip() or completed.stdout.strip() or "La commande a échoué."
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Aucun processus arrêté",
+            f"Impossible d'arrêter TS4_x64.exe : {output}",
+        )
 
     def update_launch_button_state(self):
         if hasattr(self, "launch_button"):
