@@ -17,8 +17,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.21"
-APP_VERSION_DATE = "22/10/2025 09:02 UTC"
+APP_VERSION = "v3.22"
+APP_VERSION_DATE = "22/10/2025 09:07 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 
 SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
@@ -66,10 +66,10 @@ def normalize_addon_metadata(addons):
                             continue
                         if path_str.endswith("/"):
                             base_path = os.path.normpath(path_str[:-1])
-                            normalized_path = f"{base_path.replace('\\', '/')}/"
+                            normalized_path = base_path.replace("\\", "/") + "/"
                         else:
                             base_path = os.path.normpath(path_str)
-                            normalized_path = base_path.replace('\\', '/')
+                            normalized_path = base_path.replace("\\", "/")
                         if normalized_path not in paths:
                             paths.append(normalized_path)
             added_at = str(addon.get("added_at") or "").strip()
