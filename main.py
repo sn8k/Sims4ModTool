@@ -5,6 +5,7 @@ import shutil
 import shlex
 import re
 import subprocess
+import webbrowser
 import zipfile
 from collections import OrderedDict
 from functools import partial
@@ -16,9 +17,11 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.19"
-APP_VERSION_DATE = "22/10/2025 08:17 UTC"
+APP_VERSION = "v3.20"
+APP_VERSION_DATE = "22/10/2025 08:37 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
+
+SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
 
 
 DEFAULT_VERSION_RELEASES = [
@@ -176,6 +179,11 @@ def load_installed_mods(path=INSTALLED_MODS_PATH):
             "installed_at": str(entry.get("installed_at") or "").strip(),
             "target_folder": target_folder,
             "source": str(entry.get("source") or "").strip(),
+            "addons": [
+                str(addon).strip()
+                for addon in entry.get("addons", [])
+                if str(addon).strip()
+            ],
         })
 
     normalized_entries.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
@@ -632,6 +640,90 @@ class ConfigurationDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class FileDropDialog(QtWidgets.QDialog):
+    def __init__(self, title, instruction, drop_handler, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.resize(520, 300)
+        self.setAcceptDrops(True)
+        self._drop_handler = drop_handler
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        info_label = QtWidgets.QLabel(instruction, self)
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        self.drop_label = QtWidgets.QLabel("Déposez vos fichiers ici", self)
+        self.drop_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.drop_label.setMinimumHeight(100)
+        self._drop_idle_style = "QLabel { border: 2px dashed #aaaaaa; padding: 24px; background-color: #3a3a3a; }"
+        self._drop_active_style = "QLabel { border: 2px solid #00aa88; padding: 24px; background-color: #2a2a2a; }"
+        self.drop_label.setStyleSheet(self._drop_idle_style)
+        layout.addWidget(self.drop_label)
+
+        close_button = QtWidgets.QPushButton("Fermer", self)
+        close_button.clicked.connect(self.reject)
+        layout.addWidget(close_button, alignment=QtCore.Qt.AlignRight)
+
+    def dragEnterEvent(self, event):
+        if self._contains_supported_files(event):
+            event.acceptProposedAction()
+            self._set_drop_active(True)
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        super().dragLeaveEvent(event)
+        self._set_drop_active(False)
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            self._set_drop_active(False)
+            return
+
+        file_paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        success_messages, error_messages = self._drop_handler(file_paths)
+
+        if success_messages:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Opération terminée",
+                "\n".join(success_messages),
+            )
+        if error_messages:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Certaines opérations ont échoué",
+                "\n".join(error_messages),
+            )
+
+        if success_messages and not error_messages:
+            self.accept()
+        elif success_messages:
+            # Laisser la fenêtre ouverte pour d'éventuels ajouts complémentaires
+            self._set_drop_active(False)
+        else:
+            self._set_drop_active(False)
+
+        event.acceptProposedAction()
+
+    def _contains_supported_files(self, event):
+        if not event.mimeData().hasUrls():
+            return False
+        for url in event.mimeData().urls():
+            if not url.isLocalFile():
+                continue
+            if os.path.splitext(url.toLocalFile())[1].lower() in SUPPORTED_INSTALL_EXTENSIONS:
+                return True
+        return False
+
+    def _set_drop_active(self, active):
+        self.drop_label.setStyleSheet(self._drop_active_style if active else self._drop_idle_style)
+
+
 class ModInstallerDialog(QtWidgets.QDialog):
     def __init__(self, parent=None, mod_directory=""):
         super().__init__(parent)
@@ -666,18 +758,21 @@ class ModInstallerDialog(QtWidgets.QDialog):
         layout.addWidget(self.drop_label)
 
         self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(4)
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels([
             "Mod",
             "Type",
             "Installé le",
             "Dossier",
+            "Addons",
         ])
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         for column in range(1, self.table.columnCount()):
             self.table.horizontalHeader().setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeToContents)
+        self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.table, stretch=1)
 
         close_button = QtWidgets.QPushButton("Fermer", self)
@@ -745,7 +840,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
 
     @staticmethod
     def _is_supported_extension(file_path):
-        return os.path.splitext(file_path)[1].lower() in {".package", ".ts4script", ".zip"}
+        return os.path.splitext(file_path)[1].lower() in SUPPORTED_INSTALL_EXTENSIONS
 
     def install_mod_from_path(self, file_path):
         if not os.path.isfile(file_path):
@@ -760,8 +855,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
         sanitized_name = sanitize_mod_folder_name(file_path)
         target_folder = os.path.join(self.mod_directory, sanitized_name)
         display_name = os.path.splitext(os.path.basename(file_path))[0]
-        extension = os.path.splitext(file_path)[1].lower()
 
+        replace_existing = False
         if os.path.exists(target_folder):
             response = QtWidgets.QMessageBox.question(
                 self,
@@ -775,38 +870,87 @@ class ModInstallerDialog(QtWidgets.QDialog):
             )
             if response != QtWidgets.QMessageBox.Yes:
                 return False, f"Installation de '{display_name}' annulée."
+            replace_existing = True
+
+        success, message = self._install_file_to_target(
+            file_path,
+            target_folder,
+            clean_before=replace_existing,
+            merge=False,
+        )
+        if not success:
+            return False, message
+
+        installed_at = datetime.utcnow().replace(microsecond=0).isoformat()
+        self._record_installation({
+            "name": display_name,
+            "type": self._describe_install_type([file_path]),
+            "installed_at": installed_at,
+            "target_folder": target_folder,
+            "source": os.path.basename(file_path),
+            "addons": [],
+        })
+
+        self.installations_performed = True
+        return True, f"'{display_name}' installé avec succès."
+
+    def _install_file_to_target(self, file_path, target_folder, *, clean_before=False, merge=False):
+        extension = os.path.splitext(file_path)[1].lower()
+
+        if clean_before and os.path.exists(target_folder):
             try:
                 shutil.rmtree(target_folder)
             except OSError as exc:
                 return False, f"Impossible de nettoyer le dossier existant : {exc}"
 
-        try:
-            if extension == ".zip" and not zipfile.is_zipfile(file_path):
-                return False, f"Le fichier n'est pas une archive zip valide : {os.path.basename(file_path)}"
+        if extension == ".zip" and not zipfile.is_zipfile(file_path):
+            return False, f"Le fichier n'est pas une archive zip valide : {os.path.basename(file_path)}"
 
+        try:
             os.makedirs(target_folder, exist_ok=True)
+        except OSError as exc:
+            return False, f"Impossible de créer le dossier cible : {exc}"
+
+        try:
             if extension in {".package", ".ts4script"}:
                 destination_path = os.path.join(target_folder, os.path.basename(file_path))
+                if os.path.exists(destination_path) and not clean_before:
+                    response = QtWidgets.QMessageBox.question(
+                        self,
+                        "Fichier déjà présent",
+                        (
+                            f"Le fichier '{os.path.basename(file_path)}' existe déjà dans le dossier cible.\n"
+                            "Souhaitez-vous le remplacer ?"
+                        ),
+                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                        QtWidgets.QMessageBox.Yes,
+                    )
+                    if response != QtWidgets.QMessageBox.Yes:
+                        return False, f"Copie de '{os.path.basename(file_path)}' annulée."
                 shutil.copy2(file_path, destination_path)
-                mod_type = f"fichier {extension}"
             else:
                 with zipfile.ZipFile(file_path, "r") as archive:
                     archive.extractall(target_folder)
-                mod_type = "archive .zip"
         except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
-            return False, f"Erreur lors de l'installation : {exc}"
+            return False, f"Erreur lors de la copie : {exc}"
 
-        installed_at = datetime.utcnow().replace(microsecond=0).isoformat()
-        self._record_installation({
-            "name": display_name,
-            "type": mod_type,
-            "installed_at": installed_at,
-            "target_folder": target_folder,
-            "source": os.path.basename(file_path),
-        })
+        verb = "ajouté" if merge and not clean_before else "installé"
+        return True, f"{os.path.basename(file_path)} {verb} dans '{os.path.basename(target_folder)}'."
 
-        self.installations_performed = True
-        return True, f"'{display_name}' installé avec succès."
+    @staticmethod
+    def _describe_install_type(file_paths):
+        extensions = []
+        for path in file_paths:
+            extension = os.path.splitext(path)[1].lower()
+            if extension in {".package", ".ts4script"}:
+                extensions.append(f"fichier {extension}")
+            elif extension == ".zip":
+                extensions.append("archive .zip")
+        if not extensions:
+            return ""
+        if len(set(extensions)) == 1:
+            return extensions[0]
+        return ", ".join(sorted(set(extensions)))
 
     def _record_installation(self, entry):
         target = entry.get("target_folder")
@@ -816,13 +960,207 @@ class ModInstallerDialog(QtWidgets.QDialog):
         for existing in self.installed_mods:
             if existing.get("target_folder") == target:
                 existing.update(entry)
+                if "addons" not in entry:
+                    existing["addons"] = existing.get("addons", [])
                 replaced = True
                 break
         if not replaced:
+            entry.setdefault("addons", [])
             self.installed_mods.append(entry)
         self.installed_mods.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
         save_installed_mods(self.installed_mods)
         self.refresh_table()
+
+    def _show_context_menu(self, position):
+        item = self.table.itemAt(position)
+        if item is None:
+            return
+        row = item.row()
+        if row < 0 or row >= len(self.installed_mods):
+            return
+        entry = self.installed_mods[row]
+
+        menu = QtWidgets.QMenu(self)
+        search_action = menu.addAction("Recherche Google")
+        menu.addSeparator()
+        addons_action = menu.addAction("Ajouter add-ons")
+        delete_action = menu.addAction("Supprimer le mod")
+        update_action = menu.addAction("Mettre à jour le mod")
+
+        chosen_action = menu.exec_(self.table.viewport().mapToGlobal(position))
+        if chosen_action is None:
+            return
+        if chosen_action == search_action:
+            self._open_google_search(entry)
+        elif chosen_action == addons_action:
+            self._prompt_addons(entry)
+        elif chosen_action == delete_action:
+            self._delete_mod(entry)
+        elif chosen_action == update_action:
+            self._prompt_update_mod(entry)
+
+    def _open_google_search(self, entry):
+        mod_name = entry.get("name") or os.path.basename(entry.get("target_folder", ""))
+        if not mod_name:
+            return
+        query = quote_plus(mod_name)
+        webbrowser.open(f"https://www.google.com/search?q={query}")
+
+    def _prompt_update_mod(self, entry):
+        target_folder = entry.get("target_folder")
+        if not target_folder or not os.path.isdir(target_folder):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Dossier introuvable",
+                "Le dossier du mod est introuvable. Vérifiez qu'il n'a pas été supprimé.",
+            )
+            return
+
+        def handle_drop(file_paths):
+            return self._perform_update(entry, file_paths)
+
+        instruction = (
+            "Glissez-déposez un fichier .package, .ts4script ou .zip pour remplacer le contenu du dossier du mod."
+        )
+        dialog = FileDropDialog("Mettre à jour le mod", instruction, handle_drop, self)
+        dialog.exec_()
+
+    def _prompt_addons(self, entry):
+        target_folder = entry.get("target_folder")
+        if not target_folder or not os.path.isdir(target_folder):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Dossier introuvable",
+                "Le dossier du mod est introuvable. Vérifiez qu'il n'a pas été supprimé.",
+            )
+            return
+
+        def handle_drop(file_paths):
+            return self._perform_addons(entry, file_paths)
+
+        instruction = (
+            "Glissez-déposez des fichiers .package, .ts4script ou .zip pour les ajouter au dossier du mod."
+        )
+        dialog = FileDropDialog("Ajouter des add-ons", instruction, handle_drop, self)
+        dialog.exec_()
+
+    def _perform_update(self, entry, file_paths):
+        target_folder = entry.get("target_folder")
+        if not target_folder:
+            return [], ["Dossier cible invalide."]
+
+        success_messages = []
+        error_messages = []
+        processed_files = []
+
+        for index, path in enumerate(file_paths):
+            if not os.path.isfile(path):
+                error_messages.append(f"Fichier introuvable : {path}")
+                continue
+            if not self._is_supported_extension(path):
+                error_messages.append(f"Extension non supportée : {os.path.basename(path)}")
+                continue
+            success, message = self._install_file_to_target(
+                path,
+                target_folder,
+                clean_before=(index == 0),
+                merge=False,
+            )
+            if success:
+                success_messages.append(message)
+                processed_files.append(path)
+            elif message:
+                error_messages.append(message)
+
+        if processed_files:
+            updated_entry = dict(entry)
+            updated_entry["installed_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
+            updated_entry["type"] = self._describe_install_type(processed_files)
+            updated_entry["source"] = ", ".join(os.path.basename(path) for path in processed_files)
+            updated_entry["addons"] = []
+            self._record_installation(updated_entry)
+            self.installations_performed = True
+
+        return success_messages, error_messages
+
+    def _perform_addons(self, entry, file_paths):
+        target_folder = entry.get("target_folder")
+        if not target_folder:
+            return [], ["Dossier cible invalide."]
+
+        success_messages = []
+        error_messages = []
+        added_sources = []
+
+        for path in file_paths:
+            if not os.path.isfile(path):
+                error_messages.append(f"Fichier introuvable : {path}")
+                continue
+            if not self._is_supported_extension(path):
+                error_messages.append(f"Extension non supportée : {os.path.basename(path)}")
+                continue
+            success, message = self._install_file_to_target(
+                path,
+                target_folder,
+                clean_before=False,
+                merge=True,
+            )
+            if success:
+                success_messages.append(message)
+                added_sources.append(os.path.basename(path))
+            elif message:
+                error_messages.append(message)
+
+        if added_sources:
+            updated_entry = dict(entry)
+            existing_addons = list(updated_entry.get("addons", []))
+            existing_addons.extend(added_sources)
+            seen = set()
+            filtered_addons = []
+            for addon in existing_addons:
+                key = addon.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                filtered_addons.append(addon)
+            updated_entry["addons"] = filtered_addons
+            updated_entry["installed_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
+            self._record_installation(updated_entry)
+            self.installations_performed = True
+
+        return success_messages, error_messages
+
+    def _delete_mod(self, entry):
+        target_folder = entry.get("target_folder")
+        mod_name = entry.get("name") or os.path.basename(target_folder or "")
+        response = QtWidgets.QMessageBox.question(
+            self,
+            "Supprimer le mod",
+            (
+                f"Voulez-vous supprimer le mod '{mod_name}' ?\n"
+                "Le dossier correspondant sera supprimé du disque."
+            ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if response != QtWidgets.QMessageBox.Yes:
+            return
+
+        if target_folder and os.path.exists(target_folder):
+            try:
+                shutil.rmtree(target_folder)
+            except OSError as exc:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Suppression impossible",
+                    f"Le dossier n'a pas pu être supprimé : {exc}",
+                )
+                return
+
+        self.installed_mods = [item for item in self.installed_mods if item.get("target_folder") != target_folder]
+        save_installed_mods(self.installed_mods)
+        self.refresh_table()
+        self.installations_performed = True
 
     def refresh_table(self):
         self.table.setRowCount(len(self.installed_mods))
@@ -832,7 +1170,9 @@ class ModInstallerDialog(QtWidgets.QDialog):
             installed_at = format_installation_display(entry.get("installed_at", ""))
             folder_name = os.path.basename(entry.get("target_folder", ""))
 
-            for column, value in enumerate((mod_name, mod_type, installed_at, folder_name)):
+            addons_flag = "✗" if entry.get("addons") else ""
+
+            for column, value in enumerate((mod_name, mod_type, installed_at, folder_name, addons_flag)):
                 item = QtWidgets.QTableWidgetItem(value)
                 item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
                 self.table.setItem(row, column, item)
