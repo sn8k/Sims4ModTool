@@ -4,6 +4,7 @@ import json
 import shutil
 import shlex
 import re
+import subprocess
 from collections import OrderedDict
 from functools import partial
 from urllib.parse import quote_plus
@@ -14,8 +15,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.17"
-APP_VERSION_DATE = "22/10/2025 08:15 UTC"
+APP_VERSION = "v3.18"
+APP_VERSION_DATE = "22/10/2025 08:00 UTC"
 
 
 DEFAULT_VERSION_RELEASES = [
@@ -162,7 +163,8 @@ def load_settings(path=SETTINGS_PATH):
     defaults = {
         "version_filter_start": "",
         "version_filter_end": "",
-        "filter_package_and_ts4script": False,
+        "show_package_mods": True,
+        "show_ts4script_mods": True,
         "mod_directory": "",
         "sims_cache_directory": "",
         "backups_directory": "",
@@ -176,6 +178,10 @@ def load_settings(path=SETTINGS_PATH):
     }
     for key, value in defaults.items():
         settings.setdefault(key, value)
+    legacy_combined_filter = settings.pop("filter_package_and_ts4script", None)
+    if legacy_combined_filter is True:
+        settings["show_package_mods"] = True
+        settings["show_ts4script_mods"] = True
     legacy_hide_post_118 = settings.pop("hide_post_118", None)
     legacy_filter_range = settings.pop("filter_116_to_118", None)
     if not settings.get("version_filter_start") and legacy_filter_range:
@@ -247,6 +253,8 @@ def generate_data_rows(directory, settings, version_releases):
     data_rows = []
     ignored_mods = set(settings.get("ignored_mods", []))
     show_ignored = settings.get("show_ignored", False)
+    show_packages = settings.get("show_package_mods", True)
+    show_scripts = settings.get("show_ts4script_mods", True)
 
     # .package files
     for pkg, pkg_path in package_files.items():
@@ -263,7 +271,9 @@ def generate_data_rows(directory, settings, version_releases):
             continue
         if start_limit and mod_latest_date and mod_latest_date < start_limit:
             continue
-        if settings["filter_package_and_ts4script"] and not script_path:
+        has_package = True
+        has_script = script_path is not None
+        if not ((has_package and show_packages) or (has_script and show_scripts)):
             continue
 
         candidates = [name for name in (pkg, script_file if script_path else None) if name]
@@ -299,7 +309,7 @@ def generate_data_rows(directory, settings, version_releases):
             continue
         if start_limit and script_date and script_date < start_limit:
             continue
-        if settings["filter_package_and_ts4script"]:
+        if not show_scripts:
             continue
         candidates = [script]
         ignored = any(name in ignored_mods for name in candidates)
@@ -628,9 +638,13 @@ class ModManagerApp(QtWidgets.QWidget):
         self.version_end_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
         version_range_layout.addWidget(self.version_end_combo)
 
-        self.filter_package_and_ts4script_checkbox = QtWidgets.QCheckBox("Uniquement mods avec .package + .ts4script", self)
-        self.filter_package_and_ts4script_checkbox.setChecked(self.settings.get("filter_package_and_ts4script", False))
-        self.filter_package_and_ts4script_checkbox.toggled.connect(lambda: self.toggle_setting("filter_package_and_ts4script"))
+        self.show_package_mods_checkbox = QtWidgets.QCheckBox("Show Package", self)
+        self.show_package_mods_checkbox.setChecked(self.settings.get("show_package_mods", True))
+        self.show_package_mods_checkbox.toggled.connect(lambda: self.toggle_setting("show_package_mods"))
+
+        self.show_ts4script_mods_checkbox = QtWidgets.QCheckBox("Show TS4Script", self)
+        self.show_ts4script_mods_checkbox.setChecked(self.settings.get("show_ts4script_mods", True))
+        self.show_ts4script_mods_checkbox.toggled.connect(lambda: self.toggle_setting("show_ts4script_mods"))
 
         self.show_ignored_checkbox = QtWidgets.QCheckBox("Afficher les mods ignorés", self)
         self.show_ignored_checkbox.setChecked(self.settings.get("show_ignored", False))
@@ -638,7 +652,8 @@ class ModManagerApp(QtWidgets.QWidget):
 
         filter_layout = QtWidgets.QVBoxLayout()
         filter_layout.addLayout(version_range_layout)
-        filter_layout.addWidget(self.filter_package_and_ts4script_checkbox)
+        filter_layout.addWidget(self.show_package_mods_checkbox)
+        filter_layout.addWidget(self.show_ts4script_mods_checkbox)
         filter_layout.addWidget(self.show_ignored_checkbox)
 
         layout.addLayout(filter_layout)
@@ -708,6 +723,9 @@ class ModManagerApp(QtWidgets.QWidget):
         self.launch_button = QtWidgets.QPushButton("Launch Sims 4", self)
         self.launch_button.clicked.connect(self.launch_sims4)
 
+        self.kill_button = QtWidgets.QPushButton("Kill Sims 4", self)
+        self.kill_button.clicked.connect(self.kill_sims4)
+
         self.tools_button = QtWidgets.QPushButton("Tools", self)
         self.tools_button.clicked.connect(self.open_tools_dialog)
 
@@ -719,6 +737,7 @@ class ModManagerApp(QtWidgets.QWidget):
         button_layout.addWidget(self.clear_cache_button)
         button_layout.addWidget(self.grab_logs_button)
         button_layout.addWidget(self.launch_button)
+        button_layout.addWidget(self.kill_button)
 
         layout.addLayout(button_layout)
 
@@ -1009,6 +1028,36 @@ class ModManagerApp(QtWidgets.QWidget):
                 raise OSError("le processus n'a pas pu être démarré")
         except OSError as exc:
             QtWidgets.QMessageBox.critical(self, "Erreur", f"Impossible de lancer Sims 4 : {exc}")
+
+    def kill_sims4(self):
+        process_name = "TS4_x64.exe"
+        if sys.platform.startswith("win"):
+            command = ["taskkill", "/F", "/IM", process_name]
+            missing_command_message = "La commande taskkill est introuvable."
+        else:
+            command = ["pkill", "-f", process_name]
+            missing_command_message = "La commande pkill est introuvable."
+
+        try:
+            completed = subprocess.run(command, capture_output=True, text=True)
+        except FileNotFoundError:
+            QtWidgets.QMessageBox.critical(self, "Commande introuvable", missing_command_message)
+            return
+
+        if completed.returncode == 0:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Sims 4 arrêté",
+                "Le processus TS4_x64.exe a été arrêté avec succès.",
+            )
+            return
+
+        output = completed.stderr.strip() or completed.stdout.strip() or "La commande a échoué."
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Aucun processus arrêté",
+            f"Impossible d'arrêter TS4_x64.exe : {output}",
+        )
 
     def update_launch_button_state(self):
         if hasattr(self, "launch_button"):

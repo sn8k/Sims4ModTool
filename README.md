@@ -1,14 +1,15 @@
 # Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.17
-- **Dernière mise à jour :** 22/10/2025 08:15 UTC
+- **Version de l'application :** v3.18
+- **Dernière mise à jour :** 22/10/2025 08:00 UTC
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
 - Analyse récursive du dossier de mods avec détection des paires `.package` / `.ts4script`.
 - Estimation automatique de la colonne **Version** à partir de la dernière date connue du mod et de la table de sorties Sims 4.
 - Marquage des mods ignorés (persisté dans `ignorelist.txt`) et filtres dynamiques configurables via plages de versions (sélection des patchs de départ et d'arrivée).
+- Affichage sélectif des mods contenant des fichiers `.package` et/ou `.ts4script` grâce aux cases à cocher cumulables **Show Package** et **Show TS4Script**.
 - Export des résultats au format Excel (`.xlsx`) avec conservation de toutes les colonnes visibles.
 - Nettoyage guidé du cache Sims 4 via le bouton **Clear Sims4 Cache**.
 - Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement et possibilité d'exclure certains fichiers par nom.
@@ -65,6 +66,7 @@ Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de su
 - **Clear Sims4 Cache** : supprime les fichiers/dossiers de cache connus et affiche un compte rendu.
 - **Grab Logs** : déplace les fichiers journaux trouvés dans le dossier des mods vers un sous-dossier horodaté du dossier de backups.
 - **Launch Sims 4** : exécute `TS4_X64.exe` avec les arguments configurés (bouton désactivé si le chemin est invalide).
+- **Kill Sims 4** : termine le processus `TS4_x64.exe` en cours d'exécution.
 
 ## Gestion des journaux
 Les fichiers dont l'extension correspond à `.log`, `.txt` ou toute extension supplémentaire configurée sont déplacés dans un dossier nommé `Logs_YYYYMMDD_HHMMSS` sous le dossier de backups (sauf ceux dont le nom figure dans la liste d'exclusion configurée). L'arborescence relative depuis le dossier de mods est conservée et l'explorateur est ouvert automatiquement à la fin de l'opération.
