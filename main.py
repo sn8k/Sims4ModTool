@@ -20,9 +20,10 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.26"
-APP_VERSION_DATE = "22/10/2025 10:36 UTC"
+APP_VERSION = "v3.27"
+APP_VERSION_DATE = "22/10/2025 10:52 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
+MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
 SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
 
@@ -310,6 +311,73 @@ def save_installed_mods(installed_mods, path=INSTALLED_MODS_PATH):
         os.makedirs(directory, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(installed_mods, handle, indent=4, ensure_ascii=False)
+
+
+def load_mod_scan_cache(path=MOD_SCAN_CACHE_PATH):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return None
+    normalized_entries = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        path_value = str(entry.get("path") or "").strip()
+        if not path_value:
+            continue
+        normalized_entries.append({
+            "path": path_value.replace("\\", "/"),
+            "mtime": int(entry.get("mtime", 0)),
+            "size": int(entry.get("size", 0)),
+            "type": str(entry.get("type") or ""),
+        })
+    normalized_entries.sort(key=lambda item: item["path"].casefold())
+    normalized_root = str(data.get("root") or "").replace("\\", "/").strip()
+    return {
+        "root": normalized_root,
+        "entries": normalized_entries,
+    }
+
+
+def save_mod_scan_cache(snapshot, path=MOD_SCAN_CACHE_PATH):
+    if not isinstance(snapshot, dict):
+        return
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    serializable = {
+        "root": str(snapshot.get("root") or ""),
+        "generated_at": snapshot.get("generated_at", ""),
+        "entries": list(snapshot.get("entries", [])),
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(serializable, handle, indent=2, ensure_ascii=False)
+
+
+def mod_scan_snapshots_equal(first, second):
+    if not first or not second:
+        return False
+    first_entries = first.get("entries") or []
+    second_entries = second.get("entries") or []
+    if len(first_entries) != len(second_entries):
+        return False
+    for a, b in zip(first_entries, second_entries):
+        if (
+            a.get("path") != b.get("path")
+            or int(a.get("mtime", 0)) != int(b.get("mtime", 0))
+            or int(a.get("size", 0)) != int(b.get("size", 0))
+            or (a.get("type") or "") != (b.get("type") or "")
+        ):
+            return False
+    return True
 
 
 def sanitize_mod_folder_name(file_name):
@@ -703,17 +771,42 @@ def save_settings(settings, path=SETTINGS_PATH):
 def scan_directory(directory):
     package_files = {}
     ts4script_files = {}
+    snapshot_entries = []
+    normalized_root = os.path.abspath(directory)
     for root, dirs, files in os.walk(directory):
         for file in files:
+            lower_name = file.lower()
             full_path = os.path.join(root, file)
-            if file.lower().endswith(".package"):
+            if lower_name.endswith(".package"):
                 package_files[file] = full_path
-            elif file.lower().endswith(".ts4script"):
+            elif lower_name.endswith(".ts4script"):
                 ts4script_files[file] = full_path
-    return package_files, ts4script_files
+            else:
+                continue
+            try:
+                stat_result = os.stat(full_path)
+            except OSError:
+                continue
+            relative_path = os.path.relpath(full_path, normalized_root)
+            snapshot_entries.append({
+                "path": relative_path.replace("\\", "/"),
+                "mtime": int(stat_result.st_mtime),
+                "size": int(stat_result.st_size),
+                "type": "package" if lower_name.endswith(".package") else "ts4script",
+            })
+    snapshot_entries.sort(key=lambda item: item["path"].casefold())
+    snapshot = {
+        "root": normalized_root.replace("\\", "/"),
+        "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "entries": snapshot_entries,
+    }
+    return package_files, ts4script_files, snapshot
 
 def generate_data_rows(directory, settings, version_releases):
-    package_files, ts4script_files = scan_directory(directory)
+    package_files, ts4script_files, snapshot = scan_directory(directory)
+    previous_snapshot = load_mod_scan_cache()
+    snapshot_changed = previous_snapshot is not None and not mod_scan_snapshots_equal(previous_snapshot, snapshot)
+    save_mod_scan_cache(snapshot)
     start_version = settings.get("version_filter_start") or ""
     end_version = settings.get("version_filter_end") or ""
     start_date = version_releases.get(start_version)
@@ -804,7 +897,7 @@ def generate_data_rows(directory, settings, version_releases):
             "paths": [script_path]
         })
 
-    return data_rows
+    return data_rows, snapshot_changed
 
 def export_to_excel(save_path, data_rows):
     wb = Workbook()
@@ -1252,6 +1345,40 @@ class ModInstallerDialog(QtWidgets.QDialog):
     def _is_supported_extension(file_path):
         return os.path.splitext(file_path)[1].lower() in SUPPORTED_INSTALL_EXTENSIONS
 
+    def _collect_tracked_folders(self):
+        tracked = set()
+        for entry in self.installed_mods:
+            folder = entry.get("target_folder")
+            if not folder:
+                continue
+            normalized = os.path.normcase(os.path.abspath(folder))
+            tracked.add(normalized)
+        return tracked
+
+    def _find_untracked_duplicates(self, file_path):
+        if not self.mod_directory or not os.path.isdir(self.mod_directory):
+            return []
+        file_name = os.path.basename(file_path)
+        if not file_name:
+            return []
+        tracked = self._collect_tracked_folders()
+        duplicates = []
+        for root, dirs, files in os.walk(self.mod_directory):
+            for candidate in files:
+                if candidate.lower() != file_name.lower():
+                    continue
+                candidate_path = os.path.join(root, candidate)
+                try:
+                    if os.path.samefile(candidate_path, file_path):
+                        continue
+                except OSError:
+                    pass
+                parent_dir = os.path.normcase(os.path.abspath(root))
+                if parent_dir in tracked:
+                    continue
+                duplicates.append(os.path.abspath(candidate_path))
+        return duplicates
+
     def install_mod_from_path(self, file_path):
         if not os.path.isfile(file_path):
             return False, f"Fichier introuvable : {file_path}"
@@ -1267,6 +1394,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
         zip_plan = None
         display_name = os.path.splitext(os.path.basename(file_path))[0]
 
+        duplicates_to_replace: List[str] = []
+
         if extension == ".zip":
             plan_result = build_zip_install_plan(
                 file_path,
@@ -1281,9 +1410,27 @@ class ModInstallerDialog(QtWidgets.QDialog):
             display_name = sanitized_name
         else:
             target_folder = os.path.join(self.mod_directory, sanitized_name)
+            duplicates_to_replace = self._find_untracked_duplicates(file_path)
+            if duplicates_to_replace:
+                message_lines = [
+                    "Le fichier existe déjà dans le dossier des mods en dehors du Mod Installer.",
+                    "Chemins détectés :",
+                ]
+                message_lines.extend(duplicates_to_replace)
+                message_lines.append("")
+                message_lines.append("Souhaites-tu remplacer ces occurrences ?")
+                response = QtWidgets.QMessageBox.question(
+                    self,
+                    "Fichier déjà présent",
+                    "\n".join(message_lines),
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.Yes,
+                )
+                if response != QtWidgets.QMessageBox.Yes:
+                    duplicates_to_replace = []
 
         replace_existing = False
-        if os.path.exists(target_folder):
+        if not duplicates_to_replace and os.path.exists(target_folder):
             response = QtWidgets.QMessageBox.question(
                 self,
                 "Mod déjà installé",
@@ -1297,6 +1444,37 @@ class ModInstallerDialog(QtWidgets.QDialog):
             if response != QtWidgets.QMessageBox.Yes:
                 return False, f"Installation de '{display_name}' annulée."
             replace_existing = True
+
+        if duplicates_to_replace:
+            parent_directories = []
+            for duplicate_path in duplicates_to_replace:
+                parent_dir = os.path.dirname(duplicate_path)
+                if parent_dir not in parent_directories:
+                    parent_directories.append(parent_dir)
+            success_messages = []
+            for parent_dir in parent_directories:
+                success, install_message, _ = self._install_file_to_target(
+                    file_path,
+                    parent_dir,
+                    clean_before=False,
+                    merge=True,
+                    zip_plan=None,
+                    skip_existing_prompt=True,
+                )
+                if not success:
+                    return False, install_message
+                success_messages.append(install_message)
+                installed_at = datetime.utcnow().replace(microsecond=0).isoformat()
+                self._record_installation({
+                    "name": display_name,
+                    "type": self._describe_install_type([file_path]),
+                    "installed_at": installed_at,
+                    "target_folder": parent_dir,
+                    "source": os.path.basename(file_path),
+                    "addons": [],
+                })
+            self.installations_performed = True
+            return True, "\n".join(success_messages)
 
         success, install_message, _ = self._install_file_to_target(
             file_path,
@@ -1330,6 +1508,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
         clean_before=False,
         merge=False,
         zip_plan=None,
+        skip_existing_prompt=False,
     ):
         extension = os.path.splitext(file_path)[1].lower()
         installed_entries = []
@@ -1353,16 +1532,19 @@ class ModInstallerDialog(QtWidgets.QDialog):
             if extension in {".package", ".ts4script"}:
                 destination_path = os.path.join(target_folder, os.path.basename(file_path))
                 if os.path.exists(destination_path) and not clean_before:
-                    response = QtWidgets.QMessageBox.question(
-                        self,
-                        "Fichier déjà présent",
-                        (
-                            f"Le fichier '{os.path.basename(file_path)}' existe déjà dans le dossier cible.\n"
-                            "Souhaitez-vous le remplacer ?"
-                        ),
-                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                        QtWidgets.QMessageBox.Yes,
-                    )
+                    if skip_existing_prompt:
+                        response = QtWidgets.QMessageBox.Yes
+                    else:
+                        response = QtWidgets.QMessageBox.question(
+                            self,
+                            "Fichier déjà présent",
+                            (
+                                f"Le fichier '{os.path.basename(file_path)}' existe déjà dans le dossier cible.\n"
+                                "Souhaitez-vous le remplacer ?"
+                            ),
+                            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                            QtWidgets.QMessageBox.Yes,
+                        )
                     if response != QtWidgets.QMessageBox.Yes:
                         return False, f"Copie de '{os.path.basename(file_path)}' annulée.", []
                 shutil.copy2(file_path, destination_path)
@@ -1924,8 +2106,14 @@ class ModManagerApp(QtWidgets.QWidget):
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = ""
         self.all_data_rows = []
+        self._cache_clear_triggered_this_refresh = False
 
         self.init_ui()
+
+        if not os.path.exists(MOD_SCAN_CACHE_PATH):
+            mod_directory = self.settings.get("mod_directory", "")
+            if mod_directory and os.path.isdir(mod_directory):
+                QtCore.QTimer.singleShot(0, self.refresh_tree)
 
     def init_ui(self):
         # Layout
@@ -2181,7 +2369,8 @@ class ModManagerApp(QtWidgets.QWidget):
         dialog.exec_()
         if dialog.installations_performed:
             self.refresh_tree()
-            self.clear_sims4_cache()
+            if not self._cache_clear_triggered_this_refresh:
+                self.clear_sims4_cache()
 
     def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files):
         previous_mod_directory = self.settings.get("mod_directory", "")
@@ -2212,17 +2401,25 @@ class ModManagerApp(QtWidgets.QWidget):
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = folder
         self._update_scan_status("Scan en cours...")
-        rows = generate_data_rows(folder, self.settings, self.version_releases)
+        rows, scan_changed = generate_data_rows(folder, self.settings, self.version_releases)
         self.populate_table(rows)
         self._update_scan_status("")
+        self._cache_clear_triggered_this_refresh = False
+        if scan_changed:
+            self._cache_clear_triggered_this_refresh = True
+            self.clear_sims4_cache()
 
     def refresh_table_only(self):
         if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
             self.ignored_mods = set(self.settings.get("ignored_mods", []))
             self._update_scan_status("Scan en cours...")
-            rows = generate_data_rows(self.last_scanned_directory, self.settings, self.version_releases)
+            self._cache_clear_triggered_this_refresh = False
+            rows, scan_changed = generate_data_rows(self.last_scanned_directory, self.settings, self.version_releases)
             self.populate_table(rows)
             self._update_scan_status("")
+            if scan_changed:
+                self._cache_clear_triggered_this_refresh = True
+                self.clear_sims4_cache()
 
     def clear_sims4_cache(self):
         cache_directory = self.settings.get("sims_cache_directory", "")
