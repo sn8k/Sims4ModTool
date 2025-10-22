@@ -8,21 +8,24 @@ import subprocess
 import webbrowser
 import zipfile
 import stat
+import hashlib
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Set, Tuple
+from difflib import SequenceMatcher
 from functools import partial
 from urllib.parse import quote_plus
 from PyQt5 import QtWidgets, QtCore, QtGui
-from datetime import datetime, time
+from datetime import datetime, time, date
 from openpyxl import Workbook
 
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.25"
-APP_VERSION_DATE = "22/10/2025 10:19 UTC"
+APP_VERSION = "v3.31"
+APP_VERSION_DATE = "22/10/2025 11:54 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
+MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
 SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
 
@@ -52,6 +55,10 @@ DISALLOWED_ARCHIVE_EXTENSIONS = {
     ".php",
 }
 MAX_RELATIVE_DEPTH = 2
+
+MOD_NAME_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
+MIN_SIMILARITY_RATIO = 0.6
+MAX_SIMILARITY_CANDIDATES = 80
 
 
 @dataclass(frozen=True)
@@ -310,6 +317,73 @@ def save_installed_mods(installed_mods, path=INSTALLED_MODS_PATH):
         os.makedirs(directory, exist_ok=True)
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(installed_mods, handle, indent=4, ensure_ascii=False)
+
+
+def load_mod_scan_cache(path=MOD_SCAN_CACHE_PATH):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return None
+    normalized_entries = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        path_value = str(entry.get("path") or "").strip()
+        if not path_value:
+            continue
+        normalized_entries.append({
+            "path": path_value.replace("\\", "/"),
+            "mtime": int(entry.get("mtime", 0)),
+            "size": int(entry.get("size", 0)),
+            "type": str(entry.get("type") or ""),
+        })
+    normalized_entries.sort(key=lambda item: item["path"].casefold())
+    normalized_root = str(data.get("root") or "").replace("\\", "/").strip()
+    return {
+        "root": normalized_root,
+        "entries": normalized_entries,
+    }
+
+
+def save_mod_scan_cache(snapshot, path=MOD_SCAN_CACHE_PATH):
+    if not isinstance(snapshot, dict):
+        return
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    serializable = {
+        "root": str(snapshot.get("root") or ""),
+        "generated_at": snapshot.get("generated_at", ""),
+        "entries": list(snapshot.get("entries", [])),
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(serializable, handle, indent=2, ensure_ascii=False)
+
+
+def mod_scan_snapshots_equal(first, second):
+    if not first or not second:
+        return False
+    first_entries = first.get("entries") or []
+    second_entries = second.get("entries") or []
+    if len(first_entries) != len(second_entries):
+        return False
+    for a, b in zip(first_entries, second_entries):
+        if (
+            a.get("path") != b.get("path")
+            or int(a.get("mtime", 0)) != int(b.get("mtime", 0))
+            or int(a.get("size", 0)) != int(b.get("size", 0))
+            or (a.get("type") or "") != (b.get("type") or "")
+        ):
+            return False
+    return True
 
 
 def sanitize_mod_folder_name(file_name):
@@ -636,6 +710,7 @@ def load_settings(path=SETTINGS_PATH):
     defaults = {
         "version_filter_start": "",
         "version_filter_end": "",
+        "enable_version_filters": True,
         "show_package_mods": True,
         "show_ts4script_mods": True,
         "mod_directory": "",
@@ -648,9 +723,19 @@ def load_settings(path=SETTINGS_PATH):
         "grab_logs_ignore_files": [],
         "ignored_mods": [],
         "show_ignored": False,
+        "show_search_results": True,
     }
     for key, value in defaults.items():
         settings.setdefault(key, value)
+
+    show_search_pref = settings.get("show_search_results")
+    if isinstance(show_search_pref, str):
+        normalized = show_search_pref.strip().lower()
+        settings["show_search_results"] = normalized not in {"false", "0", "non", "no", "off"}
+    else:
+        settings["show_search_results"] = bool(show_search_pref)
+
+    settings["enable_version_filters"] = bool(settings.get("enable_version_filters", True))
     legacy_combined_filter = settings.pop("filter_package_and_ts4script", None)
     if legacy_combined_filter is True:
         settings["show_package_mods"] = True
@@ -700,82 +785,362 @@ def save_settings(settings, path=SETTINGS_PATH):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=4, ensure_ascii=False)
 
-def scan_directory(directory):
+def scan_directory(directory, progress_callback=None):
     package_files = {}
     ts4script_files = {}
+    snapshot_entries = []
+    normalized_root = os.path.abspath(directory)
+    relevant_files = []
     for root, dirs, files in os.walk(directory):
         for file in files:
-            full_path = os.path.join(root, file)
-            if file.lower().endswith(".package"):
-                package_files[file] = full_path
-            elif file.lower().endswith(".ts4script"):
-                ts4script_files[file] = full_path
-    return package_files, ts4script_files
+            lower_name = file.lower()
+            if lower_name.endswith((".package", ".ts4script")):
+                full_path = os.path.join(root, file)
+                relevant_files.append((file, lower_name, full_path))
 
-def generate_data_rows(directory, settings, version_releases):
-    package_files, ts4script_files = scan_directory(directory)
+    total_files = len(relevant_files)
+    if progress_callback is not None:
+        try:
+            progress_callback(0, total_files, "")
+        except Exception:
+            pass
+
+    for index, (file, lower_name, full_path) in enumerate(relevant_files, start=1):
+        if lower_name.endswith(".package"):
+            package_files[file] = full_path
+        else:
+            ts4script_files[file] = full_path
+        try:
+            stat_result = os.stat(full_path)
+        except OSError:
+            continue
+        relative_path = os.path.relpath(full_path, normalized_root)
+        snapshot_entries.append({
+            "path": relative_path.replace("\\", "/"),
+            "mtime": int(stat_result.st_mtime),
+            "size": int(stat_result.st_size),
+            "type": "package" if lower_name.endswith(".package") else "ts4script",
+        })
+        if progress_callback is not None:
+            try:
+                progress_callback(index, total_files, full_path)
+            except Exception:
+                pass
+    snapshot_entries.sort(key=lambda item: item["path"].casefold())
+    snapshot = {
+        "root": normalized_root.replace("\\", "/"),
+        "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "entries": snapshot_entries,
+    }
+    return package_files, ts4script_files, snapshot
+
+
+def normalize_mod_basename(name):
+    if not name:
+        return ""
+    base_name = os.path.splitext(os.path.basename(name))[0]
+    normalized = MOD_NAME_SANITIZE_RE.sub("", base_name.casefold())
+    return normalized
+
+
+def stable_mod_name_hash(normalized_name):
+    if not normalized_name:
+        return 0
+    digest = hashlib.sha1(normalized_name.encode("utf-8", errors="ignore")).hexdigest()
+    return int(digest, 16)
+
+
+def similarity_confidence_label(ratio):
+    if ratio >= 0.9:
+        return "Élevée"
+    if ratio >= 0.75:
+        return "Moyenne"
+    return "Faible"
+
+def generate_data_rows(directory, settings, version_releases, progress_callback=None, yield_callback=None):
+    package_files, ts4script_files, snapshot = scan_directory(directory, progress_callback=progress_callback)
+    previous_snapshot = load_mod_scan_cache()
+    snapshot_changed = previous_snapshot is not None and not mod_scan_snapshots_equal(previous_snapshot, snapshot)
+    save_mod_scan_cache(snapshot)
+    version_filters_enabled = settings.get("enable_version_filters", True)
     start_version = settings.get("version_filter_start") or ""
     end_version = settings.get("version_filter_end") or ""
+    if not version_filters_enabled:
+        start_version = ""
+        end_version = ""
     start_date = version_releases.get(start_version)
     end_date = version_releases.get(end_version)
     start_limit = datetime.combine(start_date, time.min) if start_date else None
-    end_limit = datetime.combine(end_date, time.max) if end_date else None
+    latest_version_key = next(reversed(version_releases)) if version_releases else None
+    if end_version and latest_version_key and end_version == latest_version_key:
+        end_limit = datetime.combine(date.today(), time.max)
+    else:
+        end_limit = datetime.combine(end_date, time.max) if end_date else None
     if start_limit and end_limit and start_limit > end_limit:
         start_limit, end_limit = end_limit, start_limit
 
     data_rows = []
+    throttle_counter = 0
+
+    def _maybe_yield():
+        nonlocal throttle_counter
+        if yield_callback is None:
+            return
+        throttle_counter += 1
+        if throttle_counter % 25 != 0:
+            return
+        try:
+            yield_callback()
+        except Exception:
+            pass
     ignored_mods = set(settings.get("ignored_mods", []))
     show_ignored = settings.get("show_ignored", False)
     show_packages = settings.get("show_package_mods", True)
     show_scripts = settings.get("show_ts4script_mods", True)
 
-    # .package files
+    def _resolve_parent(path):
+        if not path:
+            return ""
+        return os.path.normcase(os.path.abspath(os.path.dirname(path)))
+
+    package_entries = {}
     for pkg, pkg_path in package_files.items():
+        normalized_name = normalize_mod_basename(pkg)
+        hash_source = normalized_name or os.path.splitext(pkg)[0].casefold()
+        package_entries[pkg] = {
+            "path": pkg_path,
+            "base": os.path.splitext(pkg)[0],
+            "normalized": normalized_name,
+            "parent": _resolve_parent(pkg_path),
+            "hash": stable_mod_name_hash(hash_source),
+        }
+
+    script_entries = {}
+    for script, script_path in ts4script_files.items():
+        normalized_name = normalize_mod_basename(script)
+        hash_source = normalized_name or os.path.splitext(script)[0].casefold()
+        script_entries[script] = {
+            "path": script_path,
+            "base": os.path.splitext(script)[0],
+            "normalized": normalized_name,
+            "parent": _resolve_parent(script_path),
+            "hash": stable_mod_name_hash(hash_source),
+        }
+
+    unpaired_packages = set(package_entries.keys())
+    unpaired_scripts = set(script_entries.keys())
+    matches: Dict[str, Dict[str, str]] = {}
+
+    # Pass 1 – même base normalisée
+    scripts_by_norm = defaultdict(list)
+    for script_name in unpaired_scripts:
+        scripts_by_norm[script_entries[script_name]["normalized"]].append(script_name)
+    for script_list in scripts_by_norm.values():
+        script_list.sort(key=str.casefold)
+
+    for pkg_name in list(unpaired_packages):
+        pkg_info = package_entries[pkg_name]
+        norm_name = pkg_info["normalized"]
+        if not norm_name:
+            continue
+        candidates = scripts_by_norm.get(norm_name)
+        if not candidates:
+            continue
+        script_name = next((candidate for candidate in candidates if candidate in unpaired_scripts), None)
+        if not script_name:
+            continue
+        normalized_display = norm_name or pkg_info["base"].casefold()
+        matches[pkg_name] = {
+            "script": script_name,
+            "confidence": "Élevée",
+            "tooltip": (
+                f"Appariement basé sur un nom normalisé identique ({normalized_display})."
+            ),
+        }
+        unpaired_packages.remove(pkg_name)
+        unpaired_scripts.remove(script_name)
+
+    # Pass 2 – même dossier parent
+    scripts_by_parent = defaultdict(list)
+    for script_name in unpaired_scripts:
+        scripts_by_parent[script_entries[script_name]["parent"]].append(script_name)
+    for script_list in scripts_by_parent.values():
+        script_list.sort(key=str.casefold)
+
+    for pkg_name in list(unpaired_packages):
+        pkg_info = package_entries[pkg_name]
+        parent = pkg_info["parent"]
+        candidates = scripts_by_parent.get(parent)
+        if not candidates:
+            continue
+        script_name = next((candidate for candidate in candidates if candidate in unpaired_scripts), None)
+        if not script_name:
+            continue
+        try:
+            rel_parent = os.path.relpath(parent, directory) if parent else "."
+        except ValueError:
+            rel_parent = parent
+        if rel_parent in (".", ""):
+            folder_display = "(racine du dossier mods)"
+        else:
+            folder_display = rel_parent.replace("\\", "/")
+        tooltip = (
+            f"Appariement basé sur le même dossier parent : {folder_display}."
+        )
+        matches[pkg_name] = {
+            "script": script_name,
+            "confidence": "Moyenne",
+            "tooltip": tooltip,
+        }
+        unpaired_packages.remove(pkg_name)
+        unpaired_scripts.remove(script_name)
+
+    # Pass 3 – similarité + fallback hash
+    scripts_by_prefix = defaultdict(list)
+    scripts_by_length = defaultdict(list)
+    for script_name in unpaired_scripts:
+        info = script_entries[script_name]
+        normalized = info["normalized"] or info["base"].casefold()
+        if normalized:
+            if len(normalized) >= 2:
+                scripts_by_prefix[(2, normalized[:2])].append(script_name)
+            scripts_by_prefix[(1, normalized[:1])].append(script_name)
+        else:
+            scripts_by_prefix[(0, "")].append(script_name)
+        scripts_by_length[len(normalized)].append(script_name)
+    for script_list in scripts_by_prefix.values():
+        script_list.sort(key=str.casefold)
+
+    similarity_candidates = []
+    for pkg_name in list(unpaired_packages):
+        pkg_info = package_entries[pkg_name]
+        normalized = pkg_info["normalized"] or pkg_info["base"].casefold()
+        if not normalized and not pkg_info["base"]:
+            continue
+        prefixes = []
+        if normalized:
+            if len(normalized) >= 2:
+                prefixes.append((2, normalized[:2]))
+            prefixes.append((1, normalized[:1]))
+        else:
+            base_lower = pkg_info["base"].casefold()
+            if len(base_lower) >= 2:
+                prefixes.append((2, base_lower[:2]))
+            if base_lower:
+                prefixes.append((1, base_lower[:1]))
+        if not prefixes:
+            prefixes.append((0, ""))
+
+        seen_scripts = set()
+        for prefix in prefixes:
+            for script_name in scripts_by_prefix.get(prefix, []):
+                if script_name not in unpaired_scripts or script_name in seen_scripts:
+                    continue
+                seen_scripts.add(script_name)
+                script_info = script_entries[script_name]
+                script_norm = script_info["normalized"] or script_info["base"].casefold()
+                ratio = SequenceMatcher(None, normalized, script_norm).ratio()
+                if ratio < MIN_SIMILARITY_RATIO:
+                    continue
+                hash_gap = abs(pkg_info["hash"] - script_info["hash"])
+                similarity_candidates.append((ratio, hash_gap, pkg_name, script_name))
+                if len(seen_scripts) >= MAX_SIMILARITY_CANDIDATES:
+                    break
+            if len(seen_scripts) >= MAX_SIMILARITY_CANDIDATES:
+                break
+
+        if not seen_scripts:
+            target_length = len(normalized)
+            length_offsets = [0, 1, -1, 2, -2]
+            for offset in length_offsets:
+                candidate_length = target_length + offset
+                if candidate_length < 0:
+                    continue
+                for script_name in scripts_by_length.get(candidate_length, []):
+                    if script_name not in unpaired_scripts or script_name in seen_scripts:
+                        continue
+                    seen_scripts.add(script_name)
+                    script_info = script_entries[script_name]
+                    script_norm = script_info["normalized"] or script_info["base"].casefold()
+                    ratio = SequenceMatcher(None, normalized, script_norm).ratio()
+                    if ratio < MIN_SIMILARITY_RATIO:
+                        continue
+                    hash_gap = abs(pkg_info["hash"] - script_info["hash"])
+                    similarity_candidates.append((ratio, hash_gap, pkg_name, script_name))
+                    if len(seen_scripts) >= MAX_SIMILARITY_CANDIDATES:
+                        break
+                if len(seen_scripts) >= MAX_SIMILARITY_CANDIDATES:
+                    break
+
+    similarity_candidates.sort(key=lambda item: (-item[0], item[1], item[2], item[3]))
+
+    for ratio, hash_gap, pkg_name, script_name in similarity_candidates:
+        if pkg_name not in unpaired_packages or script_name not in unpaired_scripts:
+            continue
+        confidence = similarity_confidence_label(ratio)
+        hash_note = f" (écart hash {hash_gap})" if hash_gap else ""
+        tooltip = (
+            f"Appariement basé sur la similarité des noms (SequenceMatcher {ratio:.2f}). "
+            f"Départage assuré par un hash stable pour les égalités{hash_note}."
+        )
+        matches[pkg_name] = {
+            "script": script_name,
+            "confidence": confidence,
+            "tooltip": tooltip,
+        }
+        unpaired_packages.remove(pkg_name)
+        unpaired_scripts.remove(script_name)
+
+    # Lignes finales
+    for pkg, pkg_info in package_entries.items():
+        pkg_path = pkg_info["path"]
         pkg_date = get_file_date(pkg_path)
-        base_name = os.path.splitext(pkg)[0]
-        script_file = f"{base_name}.ts4script"
-        script_path = ts4script_files.get(script_file)
+        match_info = matches.get(pkg)
+        script_name = match_info["script"] if match_info else ""
+        script_path = ts4script_files.get(script_name) if script_name else None
         script_date = get_file_date(script_path) if script_path else None
 
-        mod_latest_date = max((date for date in (pkg_date, script_date) if date is not None), default=None)
+        mod_latest_date = max((dt for dt in (pkg_date, script_date) if dt is not None), default=None)
 
-        # Appliquer filtres
         if end_limit and mod_latest_date and mod_latest_date > end_limit:
             continue
         if start_limit and mod_latest_date and mod_latest_date < start_limit:
             continue
+
         has_package = True
         has_script = script_path is not None
         if not ((has_package and show_packages) or (has_script and show_scripts)):
             continue
 
-        candidates = [name for name in (pkg, script_file if script_path else None) if name]
+        candidates = [name for name in (pkg, script_name if script_path else None) if name]
         ignored = any(name in ignored_mods for name in candidates)
         if ignored and not show_ignored:
             continue
 
         status = "X" if script_path else "MS"
         version = estimate_version_from_dates(pkg_date, script_date, version_releases)
+        confidence_value = match_info["confidence"] if match_info else "—"
+        confidence_tooltip = match_info["tooltip"] if match_info else "Aucun appariement détecté."
 
         data_rows.append({
             "status": status,
             "package": pkg,
             "package_date": format_datetime(pkg_date),
-            "script": script_file if script_path else "",
+            "script": script_name if script_path else "",
             "script_date": format_datetime(script_date),
             "version": version,
+            "confidence": confidence_value,
+            "confidence_tooltip": confidence_tooltip,
             "ignored": ignored,
             "ignore_candidates": candidates or [pkg],
-            "paths": [path for path in (pkg_path, script_path) if path]
+            "paths": [path for path in (pkg_path, script_path) if path],
         })
+        _maybe_yield()
 
-    # ts4script orphans
-    for script, script_path in ts4script_files.items():
-        base_name = os.path.splitext(script)[0]
-        pkg_file = f"{base_name}.package"
-        if pkg_file in package_files:
+    for script_name in sorted(unpaired_scripts, key=str.casefold):
+        script_path = ts4script_files.get(script_name)
+        if not script_path:
             continue
-
         script_date = get_file_date(script_path)
 
         if end_limit and script_date and script_date > end_limit:
@@ -784,27 +1149,37 @@ def generate_data_rows(directory, settings, version_releases):
             continue
         if not show_scripts:
             continue
-        candidates = [script]
+
+        candidates = [script_name]
         ignored = any(name in ignored_mods for name in candidates)
         if ignored and not show_ignored:
             continue
-        status = "MP"
 
+        status = "MP"
         version = estimate_version_from_dates(None, script_date, version_releases)
 
         data_rows.append({
             "status": status,
             "package": "",
             "package_date": "",
-            "script": script,
+            "script": script_name,
             "script_date": format_datetime(script_date),
             "version": version,
+            "confidence": "—",
+            "confidence_tooltip": "Aucun package correspondant trouvé.",
             "ignored": ignored,
             "ignore_candidates": candidates,
-            "paths": [script_path]
+            "paths": [script_path],
         })
+        _maybe_yield()
 
-    return data_rows
+    if yield_callback is not None:
+        try:
+            yield_callback()
+        except Exception:
+            pass
+
+    return data_rows, snapshot_changed
 
 def export_to_excel(save_path, data_rows):
     wb = Workbook()
@@ -818,6 +1193,7 @@ def export_to_excel(save_path, data_rows):
         "Fichier .ts4script",
         "Date .ts4script",
         "Version",
+        "Confiance",
         "Ignoré",
     ]
     for idx, h in enumerate(headers, start=1):
@@ -1252,6 +1628,40 @@ class ModInstallerDialog(QtWidgets.QDialog):
     def _is_supported_extension(file_path):
         return os.path.splitext(file_path)[1].lower() in SUPPORTED_INSTALL_EXTENSIONS
 
+    def _collect_tracked_folders(self):
+        tracked = set()
+        for entry in self.installed_mods:
+            folder = entry.get("target_folder")
+            if not folder:
+                continue
+            normalized = os.path.normcase(os.path.abspath(folder))
+            tracked.add(normalized)
+        return tracked
+
+    def _find_untracked_duplicates(self, file_path):
+        if not self.mod_directory or not os.path.isdir(self.mod_directory):
+            return []
+        file_name = os.path.basename(file_path)
+        if not file_name:
+            return []
+        tracked = self._collect_tracked_folders()
+        duplicates = []
+        for root, dirs, files in os.walk(self.mod_directory):
+            for candidate in files:
+                if candidate.lower() != file_name.lower():
+                    continue
+                candidate_path = os.path.join(root, candidate)
+                try:
+                    if os.path.samefile(candidate_path, file_path):
+                        continue
+                except OSError:
+                    pass
+                parent_dir = os.path.normcase(os.path.abspath(root))
+                if parent_dir in tracked:
+                    continue
+                duplicates.append(os.path.abspath(candidate_path))
+        return duplicates
+
     def install_mod_from_path(self, file_path):
         if not os.path.isfile(file_path):
             return False, f"Fichier introuvable : {file_path}"
@@ -1267,6 +1677,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
         zip_plan = None
         display_name = os.path.splitext(os.path.basename(file_path))[0]
 
+        duplicates_to_replace: List[str] = []
+
         if extension == ".zip":
             plan_result = build_zip_install_plan(
                 file_path,
@@ -1281,9 +1693,27 @@ class ModInstallerDialog(QtWidgets.QDialog):
             display_name = sanitized_name
         else:
             target_folder = os.path.join(self.mod_directory, sanitized_name)
+            duplicates_to_replace = self._find_untracked_duplicates(file_path)
+            if duplicates_to_replace:
+                message_lines = [
+                    "Le fichier existe déjà dans le dossier des mods en dehors du Mod Installer.",
+                    "Chemins détectés :",
+                ]
+                message_lines.extend(duplicates_to_replace)
+                message_lines.append("")
+                message_lines.append("Souhaites-tu remplacer ces occurrences ?")
+                response = QtWidgets.QMessageBox.question(
+                    self,
+                    "Fichier déjà présent",
+                    "\n".join(message_lines),
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.Yes,
+                )
+                if response != QtWidgets.QMessageBox.Yes:
+                    duplicates_to_replace = []
 
         replace_existing = False
-        if os.path.exists(target_folder):
+        if not duplicates_to_replace and os.path.exists(target_folder):
             response = QtWidgets.QMessageBox.question(
                 self,
                 "Mod déjà installé",
@@ -1297,6 +1727,37 @@ class ModInstallerDialog(QtWidgets.QDialog):
             if response != QtWidgets.QMessageBox.Yes:
                 return False, f"Installation de '{display_name}' annulée."
             replace_existing = True
+
+        if duplicates_to_replace:
+            parent_directories = []
+            for duplicate_path in duplicates_to_replace:
+                parent_dir = os.path.dirname(duplicate_path)
+                if parent_dir not in parent_directories:
+                    parent_directories.append(parent_dir)
+            success_messages = []
+            for parent_dir in parent_directories:
+                success, install_message, _ = self._install_file_to_target(
+                    file_path,
+                    parent_dir,
+                    clean_before=False,
+                    merge=True,
+                    zip_plan=None,
+                    skip_existing_prompt=True,
+                )
+                if not success:
+                    return False, install_message
+                success_messages.append(install_message)
+                installed_at = datetime.utcnow().replace(microsecond=0).isoformat()
+                self._record_installation({
+                    "name": display_name,
+                    "type": self._describe_install_type([file_path]),
+                    "installed_at": installed_at,
+                    "target_folder": parent_dir,
+                    "source": os.path.basename(file_path),
+                    "addons": [],
+                })
+            self.installations_performed = True
+            return True, "\n".join(success_messages)
 
         success, install_message, _ = self._install_file_to_target(
             file_path,
@@ -1330,6 +1791,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
         clean_before=False,
         merge=False,
         zip_plan=None,
+        skip_existing_prompt=False,
     ):
         extension = os.path.splitext(file_path)[1].lower()
         installed_entries = []
@@ -1353,16 +1815,19 @@ class ModInstallerDialog(QtWidgets.QDialog):
             if extension in {".package", ".ts4script"}:
                 destination_path = os.path.join(target_folder, os.path.basename(file_path))
                 if os.path.exists(destination_path) and not clean_before:
-                    response = QtWidgets.QMessageBox.question(
-                        self,
-                        "Fichier déjà présent",
-                        (
-                            f"Le fichier '{os.path.basename(file_path)}' existe déjà dans le dossier cible.\n"
-                            "Souhaitez-vous le remplacer ?"
-                        ),
-                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                        QtWidgets.QMessageBox.Yes,
-                    )
+                    if skip_existing_prompt:
+                        response = QtWidgets.QMessageBox.Yes
+                    else:
+                        response = QtWidgets.QMessageBox.question(
+                            self,
+                            "Fichier déjà présent",
+                            (
+                                f"Le fichier '{os.path.basename(file_path)}' existe déjà dans le dossier cible.\n"
+                                "Souhaitez-vous le remplacer ?"
+                            ),
+                            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                            QtWidgets.QMessageBox.Yes,
+                        )
                     if response != QtWidgets.QMessageBox.Yes:
                         return False, f"Copie de '{os.path.basename(file_path)}' annulée.", []
                 shutil.copy2(file_path, destination_path)
@@ -1486,6 +1951,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
         menu = QtWidgets.QMenu(self)
         search_action = menu.addAction("Recherche Google")
         menu.addSeparator()
+        open_action = menu.addAction("Ouvrir dans l'explorateur")
         addons_action = menu.addAction("Ajouter add-ons")
         remove_addons_action = menu.addAction("Supprimer add-ons")
         remove_addons_action.setEnabled(bool(entry.get("addons")))
@@ -1497,6 +1963,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
             return
         if chosen_action == search_action:
             self._open_google_search(entry)
+        elif chosen_action == open_action:
+            self._open_in_file_manager(entry.get("target_folder"))
         elif chosen_action == addons_action:
             self._prompt_addons(entry)
         elif chosen_action == remove_addons_action:
@@ -1505,6 +1973,34 @@ class ModInstallerDialog(QtWidgets.QDialog):
             self._delete_mod(entry)
         elif chosen_action == update_action:
             self._prompt_update_mod(entry)
+
+    def _open_in_file_manager(self, target_path):
+        if not target_path:
+            return
+        if not os.path.exists(target_path):
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Dossier introuvable",
+                "Le dossier du mod est introuvable. Vérifiez qu'il n'a pas été supprimé.",
+            )
+            return
+
+        if os.path.isfile(target_path):
+            target_path = os.path.dirname(target_path) or target_path
+
+        if sys.platform.startswith("win"):
+            try:
+                os.startfile(target_path)
+            except OSError:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Erreur",
+                    "Impossible d'ouvrir l'explorateur de fichiers.",
+                )
+        elif sys.platform == "darwin":
+            QtCore.QProcess.startDetached("open", [target_path])
+        else:
+            QtCore.QProcess.startDetached("xdg-open", [target_path])
 
     def _open_google_search(self, entry):
         mod_name = entry.get("name") or os.path.basename(entry.get("target_folder", ""))
@@ -1893,8 +2389,25 @@ class ModManagerApp(QtWidgets.QWidget):
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = ""
         self.all_data_rows = []
+        self._cache_clear_triggered_this_refresh = False
 
         self.init_ui()
+
+        if not os.path.exists(MOD_SCAN_CACHE_PATH):
+            mod_directory = self.settings.get("mod_directory", "")
+            if mod_directory and os.path.isdir(mod_directory):
+                QtCore.QTimer.singleShot(0, self.refresh_tree)
+
+    def _yield_ui_events(self, max_time_ms=25):
+        try:
+            flags_type = QtCore.QEventLoop.ProcessEventsFlag
+            flags = flags_type.ExcludeUserInputEvents | flags_type.ExcludeSocketNotifiers
+        except AttributeError:
+            flags = QtCore.QEventLoop.ExcludeUserInputEvents | QtCore.QEventLoop.ExcludeSocketNotifiers
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        app.processEvents(flags, max_time_ms)
 
     def init_ui(self):
         # Layout
@@ -1932,11 +2445,18 @@ class ModManagerApp(QtWidgets.QWidget):
 
         # Filtrage
         version_range_layout = QtWidgets.QHBoxLayout()
-        version_range_layout.addWidget(QtWidgets.QLabel("Version de départ :", self))
+        self.version_filters_checkbox = QtWidgets.QCheckBox("Versions", self)
+        self.version_filters_checkbox.setChecked(self.settings.get("enable_version_filters", True))
+        self.version_filters_checkbox.toggled.connect(self._on_version_filters_toggled)
+        version_range_layout.addWidget(self.version_filters_checkbox)
+
+        self.version_start_label = QtWidgets.QLabel("Version de départ :", self)
+        version_range_layout.addWidget(self.version_start_label)
         self.version_start_combo = QtWidgets.QComboBox(self)
         self.version_start_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
         version_range_layout.addWidget(self.version_start_combo)
-        version_range_layout.addWidget(QtWidgets.QLabel("Version d'arrivée :", self))
+        self.version_end_label = QtWidgets.QLabel("Version d'arrivée :", self)
+        version_range_layout.addWidget(self.version_end_label)
         self.version_end_combo = QtWidgets.QComboBox(self)
         self.version_end_combo.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToContents)
         version_range_layout.addWidget(self.version_end_combo)
@@ -1964,23 +2484,41 @@ class ModManagerApp(QtWidgets.QWidget):
         self.populate_version_combos()
         self.version_start_combo.currentIndexChanged.connect(self.on_version_filter_changed)
         self.version_end_combo.currentIndexChanged.connect(self.on_version_filter_changed)
+        self._update_version_filter_visibility()
 
         search_layout = QtWidgets.QHBoxLayout()
-        search_layout.addWidget(QtWidgets.QLabel("Recherche mod :"))
         self.search_edit = QtWidgets.QLineEdit(self)
         self.search_edit.setPlaceholderText("Nom du mod à rechercher")
         self.search_edit.textChanged.connect(self.apply_search_filter)
+        self.show_search_checkbox = QtWidgets.QCheckBox("Afficher recherche", self)
+        self.show_search_checkbox.setChecked(self.settings.get("show_search_results", True))
+        self.show_search_checkbox.toggled.connect(self.toggle_show_search_results)
+        search_layout.addWidget(self.show_search_checkbox)
+        search_layout.addWidget(QtWidgets.QLabel("Recherche mod :"))
         search_layout.addWidget(self.search_edit)
+
+        self.search_edit.setEnabled(self.show_search_checkbox.isChecked())
 
         layout.addLayout(search_layout)
 
+        progress_layout = QtWidgets.QHBoxLayout()
         self.scan_status_label = QtWidgets.QLabel("", self)
         self.scan_status_label.setVisible(False)
-        layout.addWidget(self.scan_status_label)
+        self.scan_progress_bar = QtWidgets.QProgressBar(self)
+        self.scan_progress_bar.setVisible(False)
+        self.scan_progress_bar.setMinimum(0)
+        self.scan_progress_bar.setMaximum(1)
+        self.scan_progress_bar.setValue(0)
+        self.scan_count_label = QtWidgets.QLabel("", self)
+        self.scan_count_label.setVisible(False)
+        progress_layout.addWidget(self.scan_status_label)
+        progress_layout.addWidget(self.scan_progress_bar, stretch=1)
+        progress_layout.addWidget(self.scan_count_label)
+        layout.addLayout(progress_layout)
 
         # Table des mods
         self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels([
             "État",
             "Fichier .package",
@@ -1988,6 +2526,7 @@ class ModManagerApp(QtWidgets.QWidget):
             "Fichier .ts4script",
             "Date .ts4script",
             "Version",
+            "Confiance",
             "Ignoré",
         ])
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
@@ -1996,7 +2535,7 @@ class ModManagerApp(QtWidgets.QWidget):
         header = self.table.horizontalHeader()
         for column in range(self.table.columnCount()):
             resize_mode = QtWidgets.QHeaderView.Stretch
-            if column in (0, 2, 4, 5, self.table.columnCount() - 1):
+            if column in (0, 2, 4, 5, 6, self.table.columnCount() - 1):
                 resize_mode = QtWidgets.QHeaderView.ResizeToContents
             header.setSectionResizeMode(column, resize_mode)
         header.setStretchLastSection(False)
@@ -2056,7 +2595,40 @@ class ModManagerApp(QtWidgets.QWidget):
         if hasattr(self, "scan_status_label") and self.scan_status_label is not None:
             self.scan_status_label.setText(message)
             self.scan_status_label.setVisible(bool(message))
-            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.AllEvents, 50)
+            self._yield_ui_events()
+
+    def _start_scan_progress(self):
+        if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
+            self.scan_progress_bar.setVisible(True)
+            self.scan_progress_bar.setMaximum(0)
+            self.scan_progress_bar.setValue(0)
+        if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
+            self.scan_count_label.setText("")
+            self.scan_count_label.setVisible(True)
+        self._yield_ui_events()
+
+    def _finish_scan_progress(self):
+        if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
+            self.scan_progress_bar.setVisible(False)
+        if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
+            self.scan_count_label.setVisible(False)
+        self._yield_ui_events()
+
+    def _handle_scan_progress(self, processed, total, current_path):
+        if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
+            if total:
+                if self.scan_progress_bar.maximum() != total:
+                    self.scan_progress_bar.setMaximum(total)
+                self.scan_progress_bar.setValue(min(processed, total))
+            else:
+                self.scan_progress_bar.setMaximum(0)
+        if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
+            if total:
+                self.scan_count_label.setText(f"Objets scannés : {processed}/{total}")
+            else:
+                self.scan_count_label.setText(f"Objets scannés : {processed}")
+            self.scan_count_label.setVisible(True)
+        self._yield_ui_events()
 
     def populate_version_combos(self):
         if not hasattr(self, "version_start_combo"):
@@ -2076,6 +2648,30 @@ class ModManagerApp(QtWidgets.QWidget):
             index = combo.findData(current_value)
             combo.setCurrentIndex(index if index != -1 else 0)
             combo.blockSignals(False)
+
+    def _on_version_filters_toggled(self, checked):
+        self.settings["enable_version_filters"] = bool(checked)
+        save_settings(self.settings)
+        self._update_version_filter_visibility()
+        self.refresh_table_only()
+
+    def _update_version_filter_visibility(self):
+        enabled = bool(self.settings.get("enable_version_filters", True))
+        if hasattr(self, "version_filters_checkbox"):
+            if self.version_filters_checkbox.isChecked() != enabled:
+                self.version_filters_checkbox.blockSignals(True)
+                self.version_filters_checkbox.setChecked(enabled)
+                self.version_filters_checkbox.blockSignals(False)
+        widgets = [
+            getattr(self, "version_start_label", None),
+            getattr(self, "version_start_combo", None),
+            getattr(self, "version_end_label", None),
+            getattr(self, "version_end_combo", None),
+        ]
+        for widget in widgets:
+            if widget is not None:
+                widget.setVisible(enabled)
+                widget.setEnabled(enabled)
 
     def on_version_filter_changed(self):
         if not hasattr(self, "version_start_combo"):
@@ -2136,6 +2732,13 @@ class ModManagerApp(QtWidgets.QWidget):
         save_settings(self.settings)
         self.refresh_table_only()
 
+    def toggle_show_search_results(self):
+        checked = self.show_search_checkbox.isChecked()
+        self.settings["show_search_results"] = checked
+        save_settings(self.settings)
+        self.search_edit.setEnabled(checked)
+        self._apply_search_filter()
+
     def update_mod_directory_label(self):
         directory = self.settings.get("mod_directory", "")
         display_text = directory if directory else "(non défini)"
@@ -2150,6 +2753,8 @@ class ModManagerApp(QtWidgets.QWidget):
         dialog.exec_()
         if dialog.installations_performed:
             self.refresh_tree()
+            if not self._cache_clear_triggered_this_refresh:
+                self.clear_sims4_cache()
 
     def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files):
         previous_mod_directory = self.settings.get("mod_directory", "")
@@ -2180,17 +2785,45 @@ class ModManagerApp(QtWidgets.QWidget):
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = folder
         self._update_scan_status("Scan en cours...")
-        rows = generate_data_rows(folder, self.settings, self.version_releases)
+        self._start_scan_progress()
+        try:
+            rows, scan_changed = generate_data_rows(
+                folder,
+                self.settings,
+                self.version_releases,
+                progress_callback=self._handle_scan_progress,
+                yield_callback=self._yield_ui_events,
+            )
+        finally:
+            self._finish_scan_progress()
         self.populate_table(rows)
         self._update_scan_status("")
+        self._cache_clear_triggered_this_refresh = False
+        if scan_changed:
+            self._cache_clear_triggered_this_refresh = True
+            self.clear_sims4_cache()
 
     def refresh_table_only(self):
         if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
             self.ignored_mods = set(self.settings.get("ignored_mods", []))
             self._update_scan_status("Scan en cours...")
-            rows = generate_data_rows(self.last_scanned_directory, self.settings, self.version_releases)
+            self._cache_clear_triggered_this_refresh = False
+            self._start_scan_progress()
+            try:
+                rows, scan_changed = generate_data_rows(
+                    self.last_scanned_directory,
+                    self.settings,
+                    self.version_releases,
+                    progress_callback=self._handle_scan_progress,
+                    yield_callback=self._yield_ui_events,
+                )
+            finally:
+                self._finish_scan_progress()
             self.populate_table(rows)
             self._update_scan_status("")
+            if scan_changed:
+                self._cache_clear_triggered_this_refresh = True
+                self.clear_sims4_cache()
 
     def clear_sims4_cache(self):
         cache_directory = self.settings.get("sims_cache_directory", "")
@@ -2236,6 +2869,16 @@ class ModManagerApp(QtWidgets.QWidget):
             messages.append("Aucun fichier ou dossier à supprimer.")
 
         QtWidgets.QMessageBox.information(self, "Nettoyage du cache", "\n".join(messages))
+
+        launch_response = QtWidgets.QMessageBox.question(
+            self,
+            "Lancer Les Sims 4",
+            "Souhaitez-vous lancer Les Sims 4 maintenant ?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if launch_response == QtWidgets.QMessageBox.Yes:
+            self.launch_sims4()
 
     def grab_logs(self):
         mod_directory = self.settings.get("mod_directory", "")
@@ -2416,7 +3059,11 @@ class ModManagerApp(QtWidgets.QWidget):
         if hasattr(self, "search_edit"):
             query = self.search_edit.text().strip().lower()
 
-        if not query:
+        show_search_results = self.settings.get("show_search_results", True)
+
+        if not show_search_results:
+            filtered_rows = list(self.all_data_rows)
+        elif not query:
             filtered_rows = list(self.all_data_rows)
         else:
             filtered_rows = [
@@ -2441,9 +3088,12 @@ class ModManagerApp(QtWidgets.QWidget):
             str(row.get("script", "")),
             str(row.get("script_date", "")),
             str(row.get("version", "")),
+            str(row.get("confidence", "")),
         ]
         ignored_value = "oui" if row.get("ignored", False) else "non"
         values.append(ignored_value)
+        if row.get("confidence_tooltip"):
+            values.append(str(row.get("confidence_tooltip")))
         values.extend(str(candidate) for candidate in row.get("ignore_candidates", []))
         values.extend(str(path) for path in row.get("paths", []))
         return [value.lower() for value in values if value]
@@ -2453,41 +3103,57 @@ class ModManagerApp(QtWidgets.QWidget):
         sorting_enabled = self.table.isSortingEnabled()
         sort_section = header.sortIndicatorSection()
         sort_order = header.sortIndicatorOrder()
-        self.table.setSortingEnabled(False)
-        self.table.setRowCount(0)  # Clear previous data
-        for row in rows:
-            row_position = self.table.rowCount()
-            self.table.insertRow(row_position)
-            columns = [
-                row.get("status", ""),
-                row.get("package", ""),
-                row.get("package_date", ""),
-                row.get("script", ""),
-                row.get("script_date", ""),
-                row.get("version", ""),
-            ]
-            for col_idx, value in enumerate(columns):
-                item = QtWidgets.QTableWidgetItem(str(value))
-                if col_idx == 0:
-                    item.setData(QtCore.Qt.UserRole, row.get("ignore_candidates", []))
-                    item.setData(QtCore.Qt.UserRole + 1, row.get("paths", []))
-                self.table.setItem(row_position, col_idx, item)
+        table = self.table
+        table.setSortingEnabled(False)
+        table.setUpdatesEnabled(False)
+        try:
+            if table.rowCount():
+                table.clearContents()
+            table.setRowCount(len(rows))
+            for row_index, row in enumerate(rows):
+                columns = [
+                    row.get("status", ""),
+                    row.get("package", ""),
+                    row.get("package_date", ""),
+                    row.get("script", ""),
+                    row.get("script_date", ""),
+                    row.get("version", ""),
+                    row.get("confidence", ""),
+                ]
+                for col_idx, value in enumerate(columns):
+                    item = QtWidgets.QTableWidgetItem(str(value))
+                    if col_idx == 0:
+                        item.setData(QtCore.Qt.UserRole, tuple(row.get("ignore_candidates") or []))
+                        item.setData(QtCore.Qt.UserRole + 1, tuple(row.get("paths") or []))
+                    if col_idx == 6:
+                        item.setToolTip(row.get("confidence_tooltip", ""))
+                    table.setItem(row_index, col_idx, item)
 
-            # Ajouter la case à cocher dans la colonne "Ignoré"
-            ignored = row.get("ignored", False)
-            ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
-            ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
-            ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-            self.table.setItem(row_position, 6, ignore_item)
-            ignore_checkbox = QtWidgets.QCheckBox()
-            ignore_checkbox.stateChanged.connect(partial(self.update_ignore_mod, row.get("ignore_candidates", [])))
-            ignore_checkbox.blockSignals(True)
-            ignore_checkbox.setChecked(ignored)
-            ignore_checkbox.blockSignals(False)
-            self.table.setCellWidget(row_position, 6, ignore_checkbox)
-        self.table.setSortingEnabled(sorting_enabled)
-        if sorting_enabled:
-            self.table.sortByColumn(sort_section, sort_order)
+                ignored = row.get("ignored", False)
+                ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
+                ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
+                ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+                table.setItem(row_index, 7, ignore_item)
+
+                ignore_checkbox = QtWidgets.QCheckBox()
+                ignore_checkbox.stateChanged.connect(
+                    partial(self.update_ignore_mod, tuple(row.get("ignore_candidates") or []))
+                )
+                ignore_checkbox.blockSignals(True)
+                ignore_checkbox.setChecked(ignored)
+                ignore_checkbox.blockSignals(False)
+                table.setCellWidget(row_index, 7, ignore_checkbox)
+
+                if row_index % 50 == 0:
+                    self._yield_ui_events()
+        finally:
+            table.setUpdatesEnabled(True)
+
+        table.setSortingEnabled(sorting_enabled)
+        if sorting_enabled and rows:
+            table.sortByColumn(sort_section, sort_order)
+        table.viewport().update()
+        self._yield_ui_events()
 
     def show_context_menu(self, position):
         index = self.table.indexAt(position)
@@ -2511,7 +3177,7 @@ class ModManagerApp(QtWidgets.QWidget):
         selected_action = menu.exec_(self.table.viewport().mapToGlobal(position))
 
         if selected_action == ignore_action:
-            checkbox = self.table.cellWidget(row, 6)
+            checkbox = self.table.cellWidget(row, 7)
             if checkbox is not None:
                 checkbox.setChecked(not checkbox.isChecked())
         elif selected_action == show_in_explorer_action:
@@ -2640,8 +3306,12 @@ class ModManagerApp(QtWidgets.QWidget):
     def export_current(self):
         rows = []
         for row in range(self.table.rowCount()):
-            row_data = [self.table.item(row, col).text() for col in range(self.table.columnCount() - 1)]
-            row_data.append(self.table.cellWidget(row, 6).isChecked())  # Ajouter l'état de la case à cocher "Ignoré"
+            row_data = []
+            for col in range(self.table.columnCount() - 1):
+                item = self.table.item(row, col)
+                row_data.append(item.text() if item else "")
+            checkbox_widget = self.table.cellWidget(row, 7)
+            row_data.append(checkbox_widget.isChecked() if checkbox_widget else False)  # Ajouter l'état de la case à cocher "Ignoré"
             rows.append(row_data)
 
         save_path = self.settings.get("xls_file_path", "")
