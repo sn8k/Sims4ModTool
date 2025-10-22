@@ -7,7 +7,10 @@ import re
 import subprocess
 import webbrowser
 import zipfile
-from collections import OrderedDict
+import stat
+from collections import OrderedDict, defaultdict
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 from functools import partial
 from urllib.parse import quote_plus
 from PyQt5 import QtWidgets, QtCore, QtGui
@@ -17,11 +20,59 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.24"
-APP_VERSION_DATE = "22/10/2025 09:37 UTC"
+APP_VERSION = "v3.25"
+APP_VERSION_DATE = "22/10/2025 10:19 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 
 SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
+
+IGNORED_ARCHIVE_PREFIXES = {"__MACOSX"}
+IGNORED_ARCHIVE_PREFIX_MATCHES = (".git",)
+IGNORED_ARCHIVE_FILENAMES = {"thumbs.db", ".ds_store"}
+IGNORED_ARCHIVE_NAME_PREFIXES = ("readme", "license")
+DISALLOWED_ARCHIVE_EXTENSIONS = {
+    ".exe",
+    ".dll",
+    ".bat",
+    ".cmd",
+    ".com",
+    ".msi",
+    ".ps1",
+    ".vbs",
+    ".js",
+    ".jar",
+    ".scr",
+    ".pif",
+    ".apk",
+    ".app",
+    ".sh",
+    ".bash",
+    ".py",
+    ".rb",
+    ".php",
+}
+MAX_RELATIVE_DEPTH = 2
+
+
+@dataclass(frozen=True)
+class ZipInstallEntry:
+    member_name: str
+    relative_parts: Tuple[str, ...]
+
+
+@dataclass
+class ZipInstallPlan:
+    mod_folder_name: str
+    target_folder: str
+    entries: List[ZipInstallEntry]
+    warnings: List[str]
+
+
+@dataclass
+class ZipPlanResult:
+    success: bool
+    plan: Optional[ZipInstallPlan]
+    message: str = ""
 
 
 def normalize_addon_metadata(addons):
@@ -285,6 +336,284 @@ def sanitize_archive_member_path(member_name):
     return "/".join(parts)
 
 
+def _zipinfo_is_symlink(info):
+    mode = (info.external_attr >> 16) & 0xFFFF
+    return stat.S_ISLNK(mode)
+
+
+def _member_should_be_skipped(parts, name):
+    if not parts:
+        return True
+    first = parts[0].casefold()
+    if first in {prefix.casefold() for prefix in IGNORED_ARCHIVE_PREFIXES}:
+        return True
+    for prefix in IGNORED_ARCHIVE_PREFIX_MATCHES:
+        if first.startswith(prefix.casefold()):
+            return True
+    lowered = name.casefold()
+    if lowered in IGNORED_ARCHIVE_FILENAMES:
+        return True
+    for prefix in IGNORED_ARCHIVE_NAME_PREFIXES:
+        if lowered.startswith(prefix):
+            return True
+    return False
+
+
+def _collapse_folder_name(parts):
+    filtered = [part for part in parts if part]
+    if not filtered:
+        return ""
+    if len(filtered) == 1:
+        return filtered[0]
+    return "-".join(filtered)
+
+
+def _ensure_depth(parts):
+    if len(parts) <= MAX_RELATIVE_DEPTH:
+        return list(parts)
+    folder = _collapse_folder_name(parts[:-1])
+    if folder:
+        return [folder, parts[-1]]
+    return [parts[-1]]
+
+
+def _register_directory(existing_dirs, parts, warnings):
+    if not parts:
+        return
+    normalized = tuple(part.casefold() for part in parts)
+    if normalized in existing_dirs:
+        return
+    existing_dirs.add(normalized)
+
+
+def _ensure_unique_parts(existing_paths, existing_dirs, parts, warnings, *, is_dir=False):
+    normalized = tuple(part.casefold() for part in parts)
+    registry = existing_dirs if is_dir else existing_paths
+    if normalized not in registry:
+        registry.add(normalized)
+        if not is_dir and parts[:-1]:
+            _register_directory(existing_dirs, parts[:-1], warnings)
+        return list(parts)
+
+    base_name = parts[-1]
+    if is_dir:
+        stem = base_name
+        suffix = ""
+    else:
+        stem, suffix = os.path.splitext(base_name)
+    counter = 2
+    while True:
+        candidate_name = f"{stem}-v{counter}{suffix}"
+        candidate_parts = list(parts[:-1]) + [candidate_name]
+        normalized_candidate = tuple(part.casefold() for part in candidate_parts)
+        if normalized_candidate not in registry:
+            registry.add(normalized_candidate)
+            if not is_dir:
+                _register_directory(existing_dirs, candidate_parts[:-1], warnings)
+            warnings.append(
+                f"Conflit détecté pour '{base_name}', renommé en '{candidate_name}'."
+            )
+            return candidate_parts
+        counter += 1
+
+
+def _resolve_file_conflicts(target_root, relative_parts, warnings, written_paths):
+    base_name = relative_parts[-1]
+    stem, ext = os.path.splitext(base_name)
+    if not stem:
+        stem = "fichier"
+    counter = 1
+    renamed_target = None
+    candidate_parts = list(relative_parts)
+
+    while True:
+        candidate_path = os.path.join(target_root, *candidate_parts)
+        candidate_key = tuple(part.casefold() for part in candidate_parts)
+        if candidate_key not in written_paths and not os.path.exists(candidate_path):
+            written_paths.add(candidate_key)
+            if renamed_target is not None:
+                warnings.append(
+                    f"Fichier existant détecté pour '{'/'.join(relative_parts)}', renommé en '{'/'.join(candidate_parts)}'."
+                )
+            return candidate_parts
+
+        counter += 1
+        renamed_target = f"{stem}-v{counter}{ext}"
+        candidate_parts = list(relative_parts[:-1]) + [renamed_target]
+
+
+def _preferred_parent_parts(entry):
+    if len(entry["adjusted_parts"]) <= 1:
+        return []
+    folder = _collapse_folder_name(entry["adjusted_parts"][:-1])
+    return [folder] if folder else []
+
+
+def _organize_zip_entries(entries):
+    plan_entries: List[ZipInstallEntry] = []
+    warnings: List[str] = []
+    existing_paths: Set[Tuple[str, ...]] = set()
+    existing_dirs: Set[Tuple[str, ...]] = set()
+    script_parents: Dict[str, Tuple[str, ...]] = {}
+    scripts_by_base: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+
+    for entry in entries:
+        if entry["is_ts4script"]:
+            scripts_by_base[entry["base_name"]].append(entry)
+
+    for entry in entries:
+        if not entry["is_ts4script"]:
+            continue
+        normalized_name = (entry["name"].casefold(),)
+        if normalized_name in existing_paths:
+            module_base = sanitize_mod_folder_name(entry.get("raw_base") or entry["name"])
+            module_base = module_base or "module"
+            folder_candidate = module_base
+            counter = 2
+            while (folder_candidate.casefold(),) in existing_dirs:
+                folder_candidate = f"{module_base}-v{counter}"
+                counter += 1
+            final_parts = _ensure_unique_parts(
+                existing_paths,
+                existing_dirs,
+                [folder_candidate, entry["name"]],
+                warnings,
+            )
+            script_parent = (final_parts[0],)
+        else:
+            final_parts = _ensure_unique_parts(
+                existing_paths,
+                existing_dirs,
+                [entry["name"]],
+                warnings,
+            )
+            script_parent = tuple(final_parts[:-1])
+        script_parents[entry["member_name"]] = script_parent
+        plan_entries.append(ZipInstallEntry(entry["member_name"], tuple(final_parts)))
+
+    for entry in entries:
+        if not entry["is_package"]:
+            continue
+        base_key = entry["base_name"]
+        parent: Sequence[str] = []
+        candidate_scripts = scripts_by_base.get(base_key, [])
+        if candidate_scripts:
+            script_entry = candidate_scripts[0]
+            parent = script_parents.get(script_entry["member_name"], ())
+        else:
+            parent = _preferred_parent_parts(entry)
+        final_parts = list(parent) + [entry["name"]]
+        final_parts = _ensure_depth(final_parts)
+        final_parts = _ensure_unique_parts(existing_paths, existing_dirs, final_parts, warnings)
+        plan_entries.append(ZipInstallEntry(entry["member_name"], tuple(final_parts)))
+
+    for entry in entries:
+        if entry["is_ts4script"] or entry["is_package"]:
+            continue
+        parent = _preferred_parent_parts(entry)
+        final_parts = parent + [entry["name"]]
+        final_parts = _ensure_depth(final_parts)
+        final_parts = _ensure_unique_parts(existing_paths, existing_dirs, final_parts, warnings)
+        plan_entries.append(ZipInstallEntry(entry["member_name"], tuple(final_parts)))
+
+    return plan_entries, warnings
+
+
+def build_zip_install_plan(
+    file_path,
+    *,
+    mod_directory,
+    default_mod_name,
+    existing_target=None,
+):
+    try:
+        archive = zipfile.ZipFile(file_path, "r")
+    except zipfile.BadZipFile as exc:
+        return ZipPlanResult(False, None, f"Archive zip invalide : {exc}")
+
+    with archive:
+        entries: List[Dict[str, object]] = []
+        for info in archive.infolist():
+            sanitized = sanitize_archive_member_path(info.filename)
+            if not sanitized:
+                continue
+            parts = sanitized.split("/")
+            if not parts:
+                continue
+            name = parts[-1]
+            if info.is_dir():
+                if _member_should_be_skipped(parts, name):
+                    continue
+                continue
+            if _zipinfo_is_symlink(info):
+                return ZipPlanResult(False, None, f"Lien symbolique détecté dans l'archive : {info.filename}")
+            extension = os.path.splitext(name)[1].lower()
+            if extension in DISALLOWED_ARCHIVE_EXTENSIONS:
+                return ZipPlanResult(False, None, f"Fichier interdit détecté : {name}")
+            if _member_should_be_skipped(parts, name):
+                continue
+            raw_base = os.path.splitext(name)[0]
+            entry = {
+                "member_name": info.filename,
+                "parts": parts,
+                "name": name,
+                "extension": extension,
+                "is_ts4script": extension == ".ts4script",
+                "is_package": extension == ".package",
+                "base_name": raw_base.casefold(),
+                "raw_base": raw_base,
+            }
+            entries.append(entry)
+
+        if not entries:
+            return ZipPlanResult(False, None, "Aucun fichier exploitable dans l'archive.")
+
+        root_dirs: Set[str] = set()
+        root_files_present = False
+        for entry in entries:
+            parts = entry["parts"]
+            if len(parts) == 1:
+                root_files_present = True
+            else:
+                root_dirs.add(parts[0])
+
+        drop_segments = 0
+        unique_root_name = ""
+        if len(root_dirs) == 1 and not root_files_present:
+            unique_root_name = next(iter(root_dirs))
+            drop_segments = 1
+
+        if existing_target:
+            target_folder = existing_target
+            mod_folder_name = os.path.basename(existing_target.rstrip("/\\")) or default_mod_name
+        else:
+            mod_folder_name = default_mod_name
+            if unique_root_name:
+                candidate = sanitize_mod_folder_name(unique_root_name)
+                if candidate:
+                    mod_folder_name = candidate
+            target_folder = os.path.join(mod_directory, mod_folder_name)
+
+        adjusted_entries: List[Dict[str, object]] = []
+        for entry in entries:
+            parts = entry["parts"][drop_segments:]
+            if not parts:
+                continue
+            adjusted_entry = dict(entry)
+            adjusted_entry["adjusted_parts"] = parts
+            adjusted_entries.append(adjusted_entry)
+
+        plan_entries, warnings = _organize_zip_entries(adjusted_entries)
+        if not plan_entries:
+            return ZipPlanResult(False, None, "Aucun fichier valide après normalisation de l'archive.")
+
+        plan = ZipInstallPlan(
+            mod_folder_name=mod_folder_name,
+            target_folder=target_folder,
+            entries=plan_entries,
+            warnings=warnings,
+        )
+        return ZipPlanResult(True, plan, "")
 def format_installation_display(iso_value):
     if not iso_value:
         return ""
@@ -934,8 +1263,24 @@ class ModInstallerDialog(QtWidgets.QDialog):
             return False, "Définissez d'abord un dossier de mods valide dans la configuration."
 
         sanitized_name = sanitize_mod_folder_name(file_path)
-        target_folder = os.path.join(self.mod_directory, sanitized_name)
+        extension = os.path.splitext(file_path)[1].lower()
+        zip_plan = None
         display_name = os.path.splitext(os.path.basename(file_path))[0]
+
+        if extension == ".zip":
+            plan_result = build_zip_install_plan(
+                file_path,
+                mod_directory=self.mod_directory,
+                default_mod_name=sanitized_name,
+            )
+            if not plan_result.success or plan_result.plan is None:
+                return False, plan_result.message or "Impossible de préparer l'installation de l'archive."
+            zip_plan = plan_result.plan
+            sanitized_name = zip_plan.mod_folder_name
+            target_folder = zip_plan.target_folder
+            display_name = sanitized_name
+        else:
+            target_folder = os.path.join(self.mod_directory, sanitized_name)
 
         replace_existing = False
         if os.path.exists(target_folder):
@@ -953,14 +1298,15 @@ class ModInstallerDialog(QtWidgets.QDialog):
                 return False, f"Installation de '{display_name}' annulée."
             replace_existing = True
 
-        success, message, _ = self._install_file_to_target(
+        success, install_message, _ = self._install_file_to_target(
             file_path,
             target_folder,
             clean_before=replace_existing,
             merge=False,
+            zip_plan=zip_plan,
         )
         if not success:
-            return False, message
+            return False, install_message
 
         installed_at = datetime.utcnow().replace(microsecond=0).isoformat()
         self._record_installation({
@@ -973,11 +1319,21 @@ class ModInstallerDialog(QtWidgets.QDialog):
         })
 
         self.installations_performed = True
-        return True, f"'{display_name}' installé avec succès."
+        final_message = install_message or f"'{display_name}' installé avec succès."
+        return True, final_message
 
-    def _install_file_to_target(self, file_path, target_folder, *, clean_before=False, merge=False):
+    def _install_file_to_target(
+        self,
+        file_path,
+        target_folder,
+        *,
+        clean_before=False,
+        merge=False,
+        zip_plan=None,
+    ):
         extension = os.path.splitext(file_path)[1].lower()
         installed_entries = []
+        plan_warnings: List[str] = []
 
         if clean_before and os.path.exists(target_folder):
             try:
@@ -1012,47 +1368,75 @@ class ModInstallerDialog(QtWidgets.QDialog):
                 shutil.copy2(file_path, destination_path)
                 installed_entries.append(os.path.basename(destination_path))
             else:
-                with zipfile.ZipFile(file_path, "r") as archive:
-                    target_root = os.path.abspath(target_folder)
-                    recorded = []
-                    recorded_set = set()
-                    extracted_any = False
+                if zip_plan is None:
+                    plan_result = build_zip_install_plan(
+                        file_path,
+                        mod_directory=os.path.dirname(target_folder) or ".",
+                        default_mod_name=os.path.basename(target_folder.rstrip("/\\")) or sanitize_mod_folder_name(target_folder),
+                        existing_target=target_folder,
+                    )
+                    if not plan_result.success or plan_result.plan is None:
+                        return False, plan_result.message or "Impossible de préparer l'extraction de l'archive.", []
+                    zip_plan = plan_result.plan
 
-                    for info in archive.infolist():
-                        sanitized = sanitize_archive_member_path(info.filename)
-                        if not sanitized:
+                target_folder = zip_plan.target_folder
+                target_root = os.path.abspath(target_folder)
+                plan_warnings.extend(zip_plan.warnings)
+                created_dirs: Set[Tuple[str, ...]] = set()
+                written_paths: Set[Tuple[str, ...]] = set()
+
+                with zipfile.ZipFile(file_path, "r") as archive:
+                    for entry in zip_plan.entries:
+                        relative_parts = list(entry.relative_parts)
+                        if not relative_parts:
                             continue
 
-                        relative_path = sanitized.split("/")
-                        destination_path = os.path.join(target_root, *relative_path)
+                        for depth in range(1, len(relative_parts)):
+                            dir_parts = tuple(relative_parts[:depth])
+                            dir_path = os.path.join(target_root, *dir_parts)
+                            if os.path.exists(dir_path):
+                                if not os.path.isdir(dir_path):
+                                    display = "/".join(dir_parts)
+                                    return False, (
+                                        f"Impossible de créer le dossier '{display}' : un fichier du même nom existe déjà."
+                                    ), []
+                            else:
+                                os.makedirs(dir_path, exist_ok=True)
+                                if dir_parts not in created_dirs:
+                                    created_dirs.add(dir_parts)
+                                    installed_entries.append("/".join(dir_parts) + "/")
+
+                        relative_parts = _resolve_file_conflicts(
+                            target_root,
+                            relative_parts,
+                            plan_warnings,
+                            written_paths,
+                        )
+                        destination_path = os.path.join(target_root, *relative_parts)
                         destination_path = os.path.abspath(destination_path)
                         if os.path.commonpath([target_root, destination_path]) != target_root:
                             continue
 
-                        if info.is_dir():
-                            os.makedirs(destination_path, exist_ok=True)
-                            display_path = "/".join(relative_path) + "/"
-                            extracted_any = True
-                        else:
-                            os.makedirs(os.path.dirname(destination_path), exist_ok=True)
-                            with archive.open(info, "r") as source, open(destination_path, "wb") as target_file:
-                                shutil.copyfileobj(source, target_file)
-                            display_path = "/".join(relative_path)
-                            extracted_any = True
+                        parent_dir = os.path.dirname(destination_path)
+                        os.makedirs(parent_dir, exist_ok=True)
 
-                        if display_path and display_path not in recorded_set:
-                            recorded.append(display_path)
-                            recorded_set.add(display_path)
+                        with archive.open(entry.member_name, "r") as source, open(destination_path, "wb") as target_file:
+                            shutil.copyfileobj(source, target_file)
 
-                    if not extracted_any:
-                        return False, "L'archive ne contient aucun fichier exploitable après sécurisation des chemins.", []
+                        display_path = "/".join(relative_parts)
+                        if display_path not in installed_entries:
+                            installed_entries.append(display_path)
 
-                    installed_entries.extend(recorded)
+                if not installed_entries:
+                    return False, "L'archive ne contient aucun fichier exploitable après normalisation.", []
         except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
             return False, f"Erreur lors de la copie : {exc}", []
 
         verb = "ajouté" if merge and not clean_before else "installé"
-        return True, f"{os.path.basename(file_path)} {verb} dans '{os.path.basename(target_folder)}'.", installed_entries
+        message = f"{os.path.basename(file_path)} {verb} dans '{os.path.basename(target_folder)}'."
+        if plan_warnings:
+            message = message + "\n" + "\n".join(plan_warnings)
+        return True, message, installed_entries
 
     @staticmethod
     def _describe_install_type(file_paths):
