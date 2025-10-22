@@ -25,8 +25,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.32"
-APP_VERSION_DATE = "22/10/2025 12:22 UTC"
+APP_VERSION = "v3.33"
+APP_VERSION_DATE = "22/10/2025 12:47 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -1337,6 +1337,149 @@ class ScanWorker(QtCore.QObject):
                 continue
         return total
 
+
+class ModsModel(QtCore.QAbstractTableModel):
+    COLUMN_KEYS = [
+        "status",
+        "package",
+        "package_date",
+        "script",
+        "script_date",
+        "version",
+        "confidence",
+        "ignored",
+    ]
+    HEADERS = [
+        "État",
+        "Fichier .package",
+        "Date .package",
+        "Fichier .ts4script",
+        "Date .ts4script",
+        "Version",
+        "Confiance",
+        "Ignoré",
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._rows: List[dict] = []
+
+    def rowCount(self, parent=QtCore.QModelIndex()):  # noqa: N802 - Qt API
+        if parent.isValid():
+            return 0
+        return len(self._rows)
+
+    def columnCount(self, parent=QtCore.QModelIndex()):  # noqa: N802 - Qt API
+        if parent.isValid():
+            return 0
+        return len(self.COLUMN_KEYS)
+
+    def data(self, index, role=QtCore.Qt.DisplayRole):  # noqa: N802 - Qt API
+        if not index.isValid() or not (0 <= index.row() < len(self._rows)):
+            return None
+        row = self._rows[index.row()]
+        key = self.COLUMN_KEYS[index.column()]
+        if role == QtCore.Qt.DisplayRole:
+            if key == "ignored":
+                return "Oui" if row.get("ignored") else "Non"
+            value = row.get(key, "")
+            return "" if value is None else str(value)
+        if role == QtCore.Qt.ToolTipRole and key == "confidence":
+            return row.get("confidence_tooltip", "")
+        return None
+
+    def headerData(self, section, orientation, role=QtCore.Qt.DisplayRole):  # noqa: N802
+        if role != QtCore.Qt.DisplayRole:
+            return None
+        if orientation == QtCore.Qt.Horizontal:
+            if 0 <= section < len(self.HEADERS):
+                return self.HEADERS[section]
+            return ""
+        return str(section + 1)
+
+    def flags(self, index):  # noqa: N802 - Qt API
+        if not index.isValid():
+            return QtCore.Qt.NoItemFlags
+        return QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
+
+    def clear(self):
+        self.beginResetModel()
+        self._rows = []
+        self.endResetModel()
+
+    def set_rows(self, rows: Sequence[dict]):
+        self.beginResetModel()
+        self._rows = list(rows)
+        self.endResetModel()
+
+    def add_rows(self, rows: Sequence[dict]):
+        if not rows:
+            return
+        start = len(self._rows)
+        end = start + len(rows) - 1
+        self.beginInsertRows(QtCore.QModelIndex(), start, end)
+        self._rows.extend(rows)
+        self.endInsertRows()
+
+    def get_row(self, row_index: int):
+        if 0 <= row_index < len(self._rows):
+            return self._rows[row_index]
+        return None
+
+    def remove_row(self, row_index: int):
+        if not (0 <= row_index < len(self._rows)):
+            return
+        self.beginRemoveRows(QtCore.QModelIndex(), row_index, row_index)
+        self._rows.pop(row_index)
+        self.endRemoveRows()
+
+
+class ModsProxyModel(QtCore.QSortFilterProxyModel):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._filter_text = ""
+        self._show_search_results = True
+
+    def setFilterFixedString(self, pattern):  # noqa: N802 - Qt API
+        self._filter_text = str(pattern or "")
+        super().setFilterFixedString(pattern)
+
+    def set_show_search_results(self, enabled: bool):
+        self._show_search_results = bool(enabled)
+        self.invalidateFilter()
+
+    def filterAcceptsRow(self, source_row, source_parent):  # noqa: N802 - Qt API
+        if not self._show_search_results:
+            return True
+        query = self._filter_text.strip().casefold()
+        if not query:
+            return True
+        source_model = self.sourceModel()
+        if not isinstance(source_model, ModsModel):
+            return super().filterAcceptsRow(source_row, source_parent)
+        row = source_model.get_row(source_row)
+        if not row:
+            return False
+        values = [
+            str(row.get("status", "")),
+            str(row.get("package", "")),
+            str(row.get("package_date", "")),
+            str(row.get("script", "")),
+            str(row.get("script_date", "")),
+            str(row.get("version", "")),
+            str(row.get("confidence", "")),
+            "oui" if row.get("ignored") else "non",
+        ]
+        tooltip = row.get("confidence_tooltip")
+        if tooltip:
+            values.append(str(tooltip))
+        values.extend(str(candidate) for candidate in row.get("ignore_candidates", []))
+        values.extend(str(path) for path in row.get("paths", []))
+        for value in values:
+            if query in value.casefold():
+                return True
+        return False
+
 def export_to_excel(save_path, data_rows):
     wb = Workbook()
     ws = wb.active
@@ -2546,7 +2689,6 @@ class ModManagerApp(QtWidgets.QWidget):
         self.last_scanned_directory = ""
         self.all_data_rows = []
         self._cache_clear_triggered_this_refresh = False
-        self.filtered_rows = []
         self.scan_thread = None
         self.scan_worker = None
         self._scan_stop_flag = None
@@ -2658,6 +2800,10 @@ class ModManagerApp(QtWidgets.QWidget):
         search_layout = QtWidgets.QHBoxLayout()
         self.search_edit = QtWidgets.QLineEdit(self)
         self.search_edit.setPlaceholderText("Nom du mod à rechercher")
+        self._search_debounce_timer = QtCore.QTimer(self)
+        self._search_debounce_timer.setInterval(100)
+        self._search_debounce_timer.setSingleShot(True)
+        self._search_debounce_timer.timeout.connect(self._apply_search_filter)
         self.search_edit.textChanged.connect(self.apply_search_filter)
         self.show_search_checkbox = QtWidgets.QCheckBox("Afficher recherche", self)
         self.show_search_checkbox.setChecked(self.settings.get("show_search_results", True))
@@ -2690,32 +2836,32 @@ class ModManagerApp(QtWidgets.QWidget):
         layout.addLayout(progress_layout)
 
         # Table des mods
-        self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(8)
-        self.table.setHorizontalHeaderLabels([
-            "État",
-            "Fichier .package",
-            "Date .package",
-            "Fichier .ts4script",
-            "Date .ts4script",
-            "Version",
-            "Confiance",
-            "Ignoré",
-        ])
+        self.table = QtWidgets.QTableView(self)
         self.table.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-
-        header = self.table.horizontalHeader()
-        for column in range(self.table.columnCount()):
-            resize_mode = QtWidgets.QHeaderView.Stretch
-            if column in (0, 2, 4, 5, 6, self.table.columnCount() - 1):
-                resize_mode = QtWidgets.QHeaderView.ResizeToContents
-            header.setSectionResizeMode(column, resize_mode)
-        header.setStretchLastSection(False)
-        self.table.setSortingEnabled(True)
+        self.table.setUniformRowHeights(True)
+        self.table.setWordWrap(False)
         self.table.setSizePolicy(QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding)
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QtWidgets.QHeaderView.Interactive)
+        header.setStretchLastSection(False)
+        self.table.verticalHeader().setVisible(False)
+        self.mods_model = ModsModel(self)
+        self.mods_proxy = ModsProxyModel(self)
+        self.mods_proxy.setSourceModel(self.mods_model)
+        self.mods_proxy.setFilterCaseSensitivity(QtCore.Qt.CaseInsensitive)
+        self.mods_proxy.setFilterKeyColumn(-1)
+        self.mods_proxy.setSortCaseSensitivity(QtCore.Qt.CaseInsensitive)
+        self.mods_proxy.setDynamicSortFilter(True)
+        self.mods_proxy.set_show_search_results(self.settings.get("show_search_results", True))
+        self.table.setModel(self.mods_proxy)
+        self.table.setSortingEnabled(True)
+        self.table.sortByColumn(0, QtCore.Qt.AscendingOrder)
         self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self.show_context_menu)
+        self._stored_sort_section = 0
+        self._stored_sort_order = QtCore.Qt.AscendingOrder
 
         layout.addWidget(self.table, stretch=1)
 
@@ -2907,6 +3053,8 @@ class ModManagerApp(QtWidgets.QWidget):
         self.settings["show_search_results"] = checked
         save_settings(self.settings)
         self.search_edit.setEnabled(checked)
+        if hasattr(self, "mods_proxy"):
+            self.mods_proxy.set_show_search_results(checked)
         self._apply_search_filter()
 
     def update_mod_directory_label(self):
@@ -2941,8 +3089,11 @@ class ModManagerApp(QtWidgets.QWidget):
 
         if previous_mod_directory != mod_directory:
             self.last_scanned_directory = ""
-            if hasattr(self, "table"):
-                self.table.setRowCount(0)
+            if hasattr(self, "mods_model"):
+                self.mods_model.clear()
+            self.all_data_rows = []
+            if hasattr(self, "mods_proxy"):
+                self.mods_proxy.invalidateFilter()
 
     def _start_scan(self, roots, *, update_last_scanned=False, status_message="Scan en cours..."):
         valid_roots = [path for path in roots if path and os.path.isdir(path)]
@@ -2967,15 +3118,17 @@ class ModManagerApp(QtWidgets.QWidget):
         self._pending_rows = []
         self._scan_buffer_timer.stop()
         self.all_data_rows = []
-        self.filtered_rows = []
         self._cache_clear_triggered_this_refresh = False
+        if hasattr(self, "mods_model"):
+            self.mods_model.clear()
+        if hasattr(self, "mods_proxy"):
+            self.mods_proxy.setDynamicSortFilter(False)
+            self.mods_proxy.invalidateFilter()
         if hasattr(self, "table"):
-            table = self.table
-            sorting_enabled = table.isSortingEnabled()
-            table.setSortingEnabled(False)
-            table.clearContents()
-            table.setRowCount(0)
-            table.setSortingEnabled(sorting_enabled)
+            header = self.table.horizontalHeader()
+            self._stored_sort_section = header.sortIndicatorSection()
+            self._stored_sort_order = header.sortIndicatorOrder()
+            self.table.setSortingEnabled(False)
 
         self._update_scan_status(status_message)
         self._start_scan_progress()
@@ -3244,173 +3397,39 @@ class ModManagerApp(QtWidgets.QWidget):
 
     def populate_table(self, data_rows):
         self.all_data_rows = list(data_rows)
+        if hasattr(self, "mods_model"):
+            self.mods_model.set_rows(self.all_data_rows)
+        if hasattr(self, "mods_proxy"):
+            self.mods_proxy.invalidateFilter()
         self._apply_search_filter()
 
     def apply_search_filter(self, _text=None):
-        self._apply_search_filter()
+        if hasattr(self, "_search_debounce_timer"):
+            self._search_debounce_timer.stop()
+            self._search_debounce_timer.start()
 
-    def _apply_search_filter(self, appended_rows=None):
-        query = ""
-        if hasattr(self, "search_edit"):
-            query = self.search_edit.text().strip().lower()
-
-        show_search_results = self.settings.get("show_search_results", True)
-
-        if appended_rows is None:
-            if not show_search_results:
-                filtered_rows = list(self.all_data_rows)
-            elif not query:
-                filtered_rows = list(self.all_data_rows)
-            else:
-                filtered_rows = [
-                    row
-                    for row in self.all_data_rows
-                    if self._row_matches_query(row, query)
-                ]
-            self.filtered_rows = filtered_rows
-            self._render_table(filtered_rows)
-        else:
-            matching_rows = []
-            for row in appended_rows:
-                if not show_search_results:
-                    matching_rows.append(row)
-                elif not query:
-                    matching_rows.append(row)
-                elif self._row_matches_query(row, query):
-                    matching_rows.append(row)
-            if not matching_rows:
-                return
-            start_index = len(self.filtered_rows)
-            self.filtered_rows.extend(matching_rows)
-            self._append_rows_to_table(matching_rows, start_index)
-
-    def _row_matches_query(self, row, query):
-        for value in self._gather_searchable_values(row):
-            if query in value:
-                return True
-        return False
-
-    def _gather_searchable_values(self, row):
-        values = [
-            str(row.get("status", "")),
-            str(row.get("package", "")),
-            str(row.get("package_date", "")),
-            str(row.get("script", "")),
-            str(row.get("script_date", "")),
-            str(row.get("version", "")),
-            str(row.get("confidence", "")),
-        ]
-        ignored_value = "oui" if row.get("ignored", False) else "non"
-        values.append(ignored_value)
-        if row.get("confidence_tooltip"):
-            values.append(str(row.get("confidence_tooltip")))
-        values.extend(str(candidate) for candidate in row.get("ignore_candidates", []))
-        values.extend(str(path) for path in row.get("paths", []))
-        return [value.lower() for value in values if value]
-
-    def _populate_table_row(self, row_index, row):
-        table = self.table
-        columns = [
-            row.get("status", ""),
-            row.get("package", ""),
-            row.get("package_date", ""),
-            row.get("script", ""),
-            row.get("script_date", ""),
-            row.get("version", ""),
-            row.get("confidence", ""),
-        ]
-        for col_idx, value in enumerate(columns):
-            item = QtWidgets.QTableWidgetItem(str(value))
-            if col_idx == 0:
-                item.setData(QtCore.Qt.UserRole, tuple(row.get("ignore_candidates") or []))
-                item.setData(QtCore.Qt.UserRole + 1, tuple(row.get("paths") or []))
-            if col_idx == 6:
-                item.setToolTip(row.get("confidence_tooltip", ""))
-            table.setItem(row_index, col_idx, item)
-
-        ignored = row.get("ignored", False)
-        ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
-        ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
-        ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-        table.setItem(row_index, 7, ignore_item)
-
-        ignore_checkbox = QtWidgets.QCheckBox()
-        ignore_checkbox.stateChanged.connect(
-            partial(self.update_ignore_mod, tuple(row.get("ignore_candidates") or []))
-        )
-        ignore_checkbox.blockSignals(True)
-        ignore_checkbox.setChecked(ignored)
-        ignore_checkbox.blockSignals(False)
-        table.setCellWidget(row_index, 7, ignore_checkbox)
-
-    def _render_table(self, rows):
-        header = self.table.horizontalHeader()
-        sorting_enabled = self.table.isSortingEnabled()
-        sort_section = header.sortIndicatorSection()
-        sort_order = header.sortIndicatorOrder()
-        table = self.table
-        table.setSortingEnabled(False)
-        table.setUpdatesEnabled(False)
-        try:
-            if table.rowCount():
-                table.clearContents()
-            table.setRowCount(len(rows))
-            for row_index, row in enumerate(rows):
-                self._populate_table_row(row_index, row)
-                if row_index % 50 == 0:
-                    self._yield_ui_events()
-        finally:
-            table.setUpdatesEnabled(True)
-
-        table.setSortingEnabled(sorting_enabled)
-        if sorting_enabled and rows:
-            table.sortByColumn(sort_section, sort_order)
-        table.viewport().update()
-        self._yield_ui_events()
-
-    def _append_rows_to_table(self, rows, start_index):
-        if not rows:
+    def _apply_search_filter(self):
+        if not hasattr(self, "mods_proxy"):
             return
-        table = self.table
-        header = table.horizontalHeader()
-        sorting_enabled = table.isSortingEnabled()
-        sort_section = header.sortIndicatorSection()
-        sort_order = header.sortIndicatorOrder()
-        table.setSortingEnabled(False)
-        table.setUpdatesEnabled(False)
-        try:
-            new_count = start_index + len(rows)
-            if table.rowCount() < start_index:
-                table.setRowCount(start_index)
-            table.setRowCount(new_count)
-            for offset, row in enumerate(rows):
-                row_index = start_index + offset
-                self._populate_table_row(row_index, row)
-                if row_index % 50 == 0:
-                    self._yield_ui_events()
-        finally:
-            table.setUpdatesEnabled(True)
-        table.setSortingEnabled(sorting_enabled)
-        if sorting_enabled and rows:
-            table.sortByColumn(sort_section, sort_order)
-        table.viewport().update()
-        self._yield_ui_events()
+        show_results = self.settings.get("show_search_results", True)
+        self.mods_proxy.set_show_search_results(show_results)
+        query = ""
+        if show_results and hasattr(self, "search_edit"):
+            query = self.search_edit.text().strip()
+        self.mods_proxy.setFilterFixedString(query)
+        if not self.mods_proxy.dynamicSortFilter():
+            self.mods_proxy.invalidateFilter()
 
     def show_context_menu(self, position):
         index = self.table.indexAt(position)
-        if not index.isValid():
+        row_data, source_row = self._proxy_to_source_row(index)
+        if row_data is None:
             return
 
-        row = index.row()
-        status_item = self.table.item(row, 0)
-        candidates = []
-        if status_item is not None:
-            stored_candidates = status_item.data(QtCore.Qt.UserRole)
-            if stored_candidates:
-                candidates = list(stored_candidates)
-
+        candidates = list(row_data.get("ignore_candidates") or [])
         menu = QtWidgets.QMenu(self)
-        ignore_action = menu.addAction("Ignorer")
+        ignore_label = "Ne plus ignorer" if row_data.get("ignored") else "Ignorer"
+        ignore_action = menu.addAction(ignore_label)
         show_in_explorer_action = menu.addAction("Afficher dans l'explorateur")
         delete_action = menu.addAction("Supprimer le mod")
         google_action = menu.addAction("Recherche Google")
@@ -3418,22 +3437,22 @@ class ModManagerApp(QtWidgets.QWidget):
         selected_action = menu.exec_(self.table.viewport().mapToGlobal(position))
 
         if selected_action == ignore_action:
-            checkbox = self.table.cellWidget(row, 7)
-            if checkbox is not None:
-                checkbox.setChecked(not checkbox.isChecked())
+            new_state = (
+                QtCore.Qt.Unchecked if row_data.get("ignored") else QtCore.Qt.Checked
+            )
+            self.update_ignore_mod(tuple(candidates), new_state)
         elif selected_action == show_in_explorer_action:
-            self.show_in_explorer(row, candidates)
+            self.show_in_explorer(row_data)
         elif selected_action == delete_action:
-            self.delete_mod(row, candidates)
+            self.delete_mod(row_data, candidates, source_row)
         elif selected_action == google_action:
-            self.launch_google_search(row, candidates)
+            self.launch_google_search(row_data, candidates)
 
-    def _resolve_row_paths(self, row):
-        status_item = self.table.item(row, 0)
-        if status_item is None:
+    def _resolve_row_paths(self, row_data):
+        if not row_data:
             return []
-        paths = status_item.data(QtCore.Qt.UserRole + 1)
-        return list(paths) if paths else []
+        paths = row_data.get("paths") or []
+        return list(paths)
 
     def _open_in_file_manager(self, target_path):
         if sys.platform.startswith("win"):
@@ -3446,8 +3465,8 @@ class ModManagerApp(QtWidgets.QWidget):
         else:
             QtCore.QProcess.startDetached("xdg-open", [target_path])
 
-    def show_in_explorer(self, row, candidates):
-        paths = self._resolve_row_paths(row)
+    def show_in_explorer(self, row_data):
+        paths = self._resolve_row_paths(row_data)
         if not paths:
             return
         target_path = paths[0]
@@ -3458,8 +3477,8 @@ class ModManagerApp(QtWidgets.QWidget):
         directory = os.path.dirname(target_path) or target_path
         self._open_in_file_manager(directory)
 
-    def delete_mod(self, row, candidates):
-        paths = self._resolve_row_paths(row)
+    def delete_mod(self, row_data, candidates, source_row):
+        paths = self._resolve_row_paths(row_data)
         if not paths:
             return
 
@@ -3500,17 +3519,10 @@ class ModManagerApp(QtWidgets.QWidget):
         if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
             self.refresh_table_only()
         else:
-            self.table.removeRow(row)
+            self._remove_source_row(source_row)
 
-    def launch_google_search(self, row, candidates):
-        file_name = ""
-        for column in (1, 3):
-            item = self.table.item(row, column)
-            if item:
-                text = item.text().strip()
-                if text:
-                    file_name = text
-                    break
+    def launch_google_search(self, row_data, candidates):
+        file_name = row_data.get("package", "") or row_data.get("script", "")
 
         if not file_name and candidates:
             file_name = candidates[0]
@@ -3573,7 +3585,32 @@ class ModManagerApp(QtWidgets.QWidget):
         pending = self._pending_rows
         self._pending_rows = []
         self.all_data_rows.extend(pending)
-        self._apply_search_filter(appended_rows=pending)
+        if hasattr(self, "mods_model"):
+            self.mods_model.add_rows(pending)
+        if hasattr(self, "mods_proxy"):
+            self.mods_proxy.invalidateFilter()
+
+    def _proxy_to_source_row(self, index):
+        if not hasattr(self, "mods_proxy") or not hasattr(self, "mods_model"):
+            return None, None
+        if not index.isValid():
+            return None, None
+        source_index = self.mods_proxy.mapToSource(index)
+        if not source_index.isValid():
+            return None, None
+        row_data = self.mods_model.get_row(source_index.row())
+        return row_data, source_index.row()
+
+    def _remove_source_row(self, source_row):
+        if not hasattr(self, "mods_model"):
+            return
+        if source_row is None:
+            return
+        if 0 <= source_row < len(self.all_data_rows):
+            self.all_data_rows.pop(source_row)
+        self.mods_model.remove_row(source_row)
+        if hasattr(self, "mods_proxy"):
+            self.mods_proxy.invalidateFilter()
 
     def _cleanup_scan_thread(self):
         if self.scan_thread is not None:
@@ -3591,6 +3628,12 @@ class ModManagerApp(QtWidgets.QWidget):
         self._cleanup_scan_thread()
         self._finish_scan_progress()
         self._set_scan_controls_enabled(True)
+        if hasattr(self, "mods_proxy"):
+            self.mods_proxy.setDynamicSortFilter(True)
+            self.mods_proxy.invalidateFilter()
+        if hasattr(self, "table"):
+            self.table.setSortingEnabled(True)
+            self.table.sortByColumn(self._stored_sort_section, self._stored_sort_order)
         if success:
             self._update_scan_status("")
             if snapshot_changed:
@@ -3647,14 +3690,26 @@ class ModManagerApp(QtWidgets.QWidget):
 
     def export_current(self):
         rows = []
-        for row in range(self.table.rowCount()):
-            row_data = []
-            for col in range(self.table.columnCount() - 1):
-                item = self.table.item(row, col)
-                row_data.append(item.text() if item else "")
-            checkbox_widget = self.table.cellWidget(row, 7)
-            row_data.append(checkbox_widget.isChecked() if checkbox_widget else False)  # Ajouter l'état de la case à cocher "Ignoré"
-            rows.append(row_data)
+        if hasattr(self, "mods_proxy") and hasattr(self, "mods_model"):
+            proxy = self.mods_proxy
+            for row in range(proxy.rowCount()):
+                source_index = proxy.mapToSource(proxy.index(row, 0))
+                if not source_index.isValid():
+                    continue
+                row_dict = self.mods_model.get_row(source_index.row())
+                if not row_dict:
+                    continue
+                row_data = [
+                    str(row_dict.get("status", "")),
+                    str(row_dict.get("package", "")),
+                    str(row_dict.get("package_date", "")),
+                    str(row_dict.get("script", "")),
+                    str(row_dict.get("script_date", "")),
+                    str(row_dict.get("version", "")),
+                    str(row_dict.get("confidence", "")),
+                    bool(row_dict.get("ignored", False)),
+                ]
+                rows.append(row_data)
 
         save_path = self.settings.get("xls_file_path", "")
         if not save_path:
