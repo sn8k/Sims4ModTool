@@ -9,9 +9,12 @@ import webbrowser
 import zipfile
 import stat
 import hashlib
+import threading
+import copy
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, MutableMapping, Optional, Sequence, Set, Tuple
+from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
 from functools import partial
 from urllib.parse import quote_plus
@@ -22,8 +25,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.31"
-APP_VERSION_DATE = "22/10/2025 11:54 UTC"
+APP_VERSION = "v3.32"
+APP_VERSION_DATE = "22/10/2025 12:22 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -785,56 +788,6 @@ def save_settings(settings, path=SETTINGS_PATH):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(settings, f, indent=4, ensure_ascii=False)
 
-def scan_directory(directory, progress_callback=None):
-    package_files = {}
-    ts4script_files = {}
-    snapshot_entries = []
-    normalized_root = os.path.abspath(directory)
-    relevant_files = []
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            lower_name = file.lower()
-            if lower_name.endswith((".package", ".ts4script")):
-                full_path = os.path.join(root, file)
-                relevant_files.append((file, lower_name, full_path))
-
-    total_files = len(relevant_files)
-    if progress_callback is not None:
-        try:
-            progress_callback(0, total_files, "")
-        except Exception:
-            pass
-
-    for index, (file, lower_name, full_path) in enumerate(relevant_files, start=1):
-        if lower_name.endswith(".package"):
-            package_files[file] = full_path
-        else:
-            ts4script_files[file] = full_path
-        try:
-            stat_result = os.stat(full_path)
-        except OSError:
-            continue
-        relative_path = os.path.relpath(full_path, normalized_root)
-        snapshot_entries.append({
-            "path": relative_path.replace("\\", "/"),
-            "mtime": int(stat_result.st_mtime),
-            "size": int(stat_result.st_size),
-            "type": "package" if lower_name.endswith(".package") else "ts4script",
-        })
-        if progress_callback is not None:
-            try:
-                progress_callback(index, total_files, full_path)
-            except Exception:
-                pass
-    snapshot_entries.sort(key=lambda item: item["path"].casefold())
-    snapshot = {
-        "root": normalized_root.replace("\\", "/"),
-        "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-        "entries": snapshot_entries,
-    }
-    return package_files, ts4script_files, snapshot
-
-
 def normalize_mod_basename(name):
     if not name:
         return ""
@@ -857,11 +810,14 @@ def similarity_confidence_label(ratio):
         return "Moyenne"
     return "Faible"
 
-def generate_data_rows(directory, settings, version_releases, progress_callback=None, yield_callback=None):
-    package_files, ts4script_files, snapshot = scan_directory(directory, progress_callback=progress_callback)
-    previous_snapshot = load_mod_scan_cache()
-    snapshot_changed = previous_snapshot is not None and not mod_scan_snapshots_equal(previous_snapshot, snapshot)
-    save_mod_scan_cache(snapshot)
+def build_mod_rows(
+    package_files,
+    ts4script_files,
+    settings,
+    version_releases,
+    package_dates,
+    script_dates,
+):
     version_filters_enabled = settings.get("enable_version_filters", True)
     start_version = settings.get("version_filter_start") or ""
     end_version = settings.get("version_filter_end") or ""
@@ -880,19 +836,6 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
         start_limit, end_limit = end_limit, start_limit
 
     data_rows = []
-    throttle_counter = 0
-
-    def _maybe_yield():
-        nonlocal throttle_counter
-        if yield_callback is None:
-            return
-        throttle_counter += 1
-        if throttle_counter % 25 != 0:
-            return
-        try:
-            yield_callback()
-        except Exception:
-            pass
     ignored_mods = set(settings.get("ignored_mods", []))
     show_ignored = settings.get("show_ignored", False)
     show_packages = settings.get("show_package_mods", True)
@@ -1094,11 +1037,11 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
     # Lignes finales
     for pkg, pkg_info in package_entries.items():
         pkg_path = pkg_info["path"]
-        pkg_date = get_file_date(pkg_path)
+        pkg_date = package_dates.get(pkg_path)
         match_info = matches.get(pkg)
         script_name = match_info["script"] if match_info else ""
         script_path = ts4script_files.get(script_name) if script_name else None
-        script_date = get_file_date(script_path) if script_path else None
+        script_date = script_dates.get(script_path) if script_path else None
 
         mod_latest_date = max((dt for dt in (pkg_date, script_date) if dt is not None), default=None)
 
@@ -1135,13 +1078,12 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
             "ignore_candidates": candidates or [pkg],
             "paths": [path for path in (pkg_path, script_path) if path],
         })
-        _maybe_yield()
 
     for script_name in sorted(unpaired_scripts, key=str.casefold):
         script_path = ts4script_files.get(script_name)
         if not script_path:
             continue
-        script_date = get_file_date(script_path)
+        script_date = script_dates.get(script_path)
 
         if end_limit and script_date and script_date > end_limit:
             continue
@@ -1171,15 +1113,229 @@ def generate_data_rows(directory, settings, version_releases, progress_callback=
             "ignore_candidates": candidates,
             "paths": [script_path],
         })
-        _maybe_yield()
+    return data_rows
 
-    if yield_callback is not None:
+
+class ScanWorker(QtCore.QObject):
+    progress = QtCore.pyqtSignal(int)
+    chunkReady = QtCore.pyqtSignal(list)
+    finished = QtCore.pyqtSignal(bool, str)
+    error = QtCore.pyqtSignal(str)
+
+    def __init__(
+        self,
+        roots: List[str],
+        settings: Dict[str, object],
+        cache: MutableMapping,
+        stop_flag: threading.Event,
+        chunk_size: int = 200,
+    ):
+        super().__init__()
+        self.roots = [os.path.abspath(path) for path in roots if path]
+        self.settings = copy.deepcopy(settings) if settings is not None else {}
+        self.cache = cache or {}
+        self.stop_flag = stop_flag
+        self.chunk_size = max(1, int(chunk_size or 200))
+        self.snapshot = {}
+        self.snapshot_changed = False
+        self.rows_total = 0
+        raw_version_items = self.settings.pop("_version_releases", [])
+        self.version_releases = OrderedDict()
+        for version, date_str in raw_version_items:
+            parsed = parse_release_date(date_str)
+            if parsed is not None and version:
+                self.version_releases[version] = parsed
+
+    def run(self):
         try:
-            yield_callback()
-        except Exception:
-            pass
+            self._run_impl()
+        except Exception as exc:  # pragma: no cover - defensive
+            self.error.emit(str(exc))
+            self.finished.emit(False, "Erreur")
 
-    return data_rows, snapshot_changed
+    def _run_impl(self):
+        if not self.roots:
+            self.finished.emit(False, "Aucun dossier valide")
+            return
+        total_files = self._estimate_total_files()
+        self.progress.emit(0)
+
+        cache_entries = {}
+        cache_entries_list = self.cache.get("entries") if isinstance(self.cache, dict) else None
+        if isinstance(cache_entries_list, list):
+            for entry in cache_entries_list:
+                if not isinstance(entry, dict):
+                    continue
+                key = str(entry.get("path") or "").strip()
+                if key:
+                    cache_entries[key] = entry
+
+        package_files: Dict[str, str] = {}
+        ts4script_files: Dict[str, str] = {}
+        snapshot_entries = []
+        file_stats: Dict[str, os.stat_result] = {}
+        unchanged_paths: Set[str] = set()
+        processed_files = 0
+
+        for root in self.roots:
+            if self.stop_flag.is_set():
+                self.finished.emit(False, "Cancelled")
+                return
+            for directory, entry in self._iter_directory(root):
+                if self.stop_flag.is_set():
+                    self.finished.emit(False, "Cancelled")
+                    return
+                full_path = os.path.join(directory, entry.name)
+                try:
+                    stat_result = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                extension = os.path.splitext(entry.name)[1].lower()
+                relative_path = os.path.relpath(full_path, root).replace("\\", "/")
+                cache_entry = cache_entries.get(relative_path)
+                if cache_entry:
+                    cached_mtime = int(cache_entry.get("mtime", 0))
+                    cached_size = int(cache_entry.get("size", 0))
+                    if int(stat_result.st_mtime) == cached_mtime and int(stat_result.st_size) == cached_size:
+                        unchanged_paths.add(full_path)
+                if extension not in {".package", ".ts4script", ".zip"}:
+                    continue
+                entry_type = (
+                    "package"
+                    if extension == ".package"
+                    else "ts4script"
+                    if extension == ".ts4script"
+                    else "archive"
+                )
+                snapshot_entries.append(
+                    {
+                        "path": relative_path,
+                        "mtime": int(stat_result.st_mtime),
+                        "size": int(stat_result.st_size),
+                        "type": entry_type,
+                    }
+                )
+                if extension == ".package":
+                    package_files[entry.name] = full_path
+                elif extension == ".ts4script":
+                    ts4script_files[entry.name] = full_path
+                file_stats[full_path] = stat_result
+                processed_files += 1
+                if total_files:
+                    percent = int((processed_files / total_files) * 100)
+                    self.progress.emit(min(percent, 100))
+
+        snapshot_entries.sort(key=lambda item: item["path"].casefold())
+        root_value = self.roots[0] if self.roots else ""
+        self.snapshot = {
+            "root": root_value.replace("\\", "/"),
+            "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "entries": snapshot_entries,
+        }
+
+        previous_snapshot = self.cache if isinstance(self.cache, dict) else None
+        self.snapshot_changed = bool(previous_snapshot) and not mod_scan_snapshots_equal(previous_snapshot, self.snapshot)
+
+        package_dates: Dict[str, Optional[datetime]] = {}
+        script_dates: Dict[str, Optional[datetime]] = {}
+
+        def _schedule_dates(paths, target):
+            changed = []
+            for path in paths:
+                if path in unchanged_paths and path in file_stats:
+                    stat_result = file_stats[path]
+                    target[path] = datetime.fromtimestamp(stat_result.st_mtime)
+                else:
+                    changed.append(path)
+            if not changed:
+                return None, []
+            executor = ThreadPoolExecutor(max_workers=12)
+            futures = [executor.submit(get_file_date, path) for path in changed]
+            return executor, list(zip(futures, changed))
+
+        package_executor, package_tasks = _schedule_dates(package_files.values(), package_dates)
+        script_executor, script_tasks = _schedule_dates(ts4script_files.values(), script_dates)
+
+        for future, path in package_tasks:
+            try:
+                package_dates[path] = future.result()
+            except Exception:
+                package_dates[path] = None
+
+        for future, path in script_tasks:
+            try:
+                script_dates[path] = future.result()
+            except Exception:
+                script_dates[path] = None
+
+        if package_executor is not None:
+            package_executor.shutdown(wait=True)
+        if script_executor is not None:
+            script_executor.shutdown(wait=True)
+
+        rows = build_mod_rows(
+            package_files,
+            ts4script_files,
+            self.settings,
+            self.version_releases,
+            package_dates,
+            script_dates,
+        )
+        self.rows_total = len(rows)
+
+        for chunk in self._chunk_rows(rows):
+            if self.stop_flag.is_set():
+                self.finished.emit(False, "Cancelled")
+                return
+            self.chunkReady.emit(chunk)
+
+        save_mod_scan_cache(self.snapshot)
+        self.progress.emit(100)
+        self.finished.emit(True, "OK")
+
+    def _chunk_rows(self, rows: List[dict]):
+        chunk_size = self.chunk_size
+        for index in range(0, len(rows), chunk_size):
+            yield rows[index : index + chunk_size]
+
+    def _is_supported(self, entry: os.DirEntry) -> bool:
+        if not entry.is_file(follow_symlinks=False):
+            return False
+        return os.path.splitext(entry.name)[1].lower() in {".package", ".ts4script", ".zip"}
+
+    def _iter_directory(self, root: str):
+        stack = [root]
+        while stack:
+            current = stack.pop()
+            if self.stop_flag.is_set():
+                return
+            try:
+                with os.scandir(current) as iterator:
+                    for entry in iterator:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif self._is_supported(entry):
+                            yield current, entry
+            except OSError:
+                continue
+
+    def _estimate_total_files(self) -> int:
+        total = 0
+        stack = list(self.roots)
+        while stack:
+            current = stack.pop()
+            if self.stop_flag.is_set():
+                return total
+            try:
+                with os.scandir(current) as iterator:
+                    for entry in iterator:
+                        if entry.is_dir(follow_symlinks=False):
+                            stack.append(entry.path)
+                        elif self._is_supported(entry):
+                            total += 1
+            except OSError:
+                continue
+        return total
 
 def export_to_excel(save_path, data_rows):
     wb = Workbook()
@@ -2390,6 +2546,19 @@ class ModManagerApp(QtWidgets.QWidget):
         self.last_scanned_directory = ""
         self.all_data_rows = []
         self._cache_clear_triggered_this_refresh = False
+        self.filtered_rows = []
+        self.scan_thread = None
+        self.scan_worker = None
+        self._scan_stop_flag = None
+        self._pending_scan_request = None
+        self._cancel_for_restart = False
+        self._user_cancelled_scan = False
+        self._pending_rows = []
+        self._scan_error_reported = False
+        self._scan_buffer_timer = QtCore.QTimer(self)
+        self._scan_buffer_timer.setSingleShot(True)
+        self._scan_buffer_timer.setInterval(75)
+        self._scan_buffer_timer.timeout.connect(self._flush_scan_buffer)
 
         self.init_ui()
 
@@ -2507,13 +2676,17 @@ class ModManagerApp(QtWidgets.QWidget):
         self.scan_progress_bar = QtWidgets.QProgressBar(self)
         self.scan_progress_bar.setVisible(False)
         self.scan_progress_bar.setMinimum(0)
-        self.scan_progress_bar.setMaximum(1)
+        self.scan_progress_bar.setMaximum(100)
         self.scan_progress_bar.setValue(0)
         self.scan_count_label = QtWidgets.QLabel("", self)
         self.scan_count_label.setVisible(False)
+        self.cancel_scan_button = QtWidgets.QPushButton("Annuler le scan", self)
+        self.cancel_scan_button.setVisible(False)
+        self.cancel_scan_button.clicked.connect(self.cancel_scan)
         progress_layout.addWidget(self.scan_status_label)
         progress_layout.addWidget(self.scan_progress_bar, stretch=1)
         progress_layout.addWidget(self.scan_count_label)
+        progress_layout.addWidget(self.cancel_scan_button)
         layout.addLayout(progress_layout)
 
         # Table des mods
@@ -2600,11 +2773,14 @@ class ModManagerApp(QtWidgets.QWidget):
     def _start_scan_progress(self):
         if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
             self.scan_progress_bar.setVisible(True)
-            self.scan_progress_bar.setMaximum(0)
+            self.scan_progress_bar.setMaximum(100)
             self.scan_progress_bar.setValue(0)
         if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
-            self.scan_count_label.setText("")
+            self.scan_count_label.setText("0 %")
             self.scan_count_label.setVisible(True)
+        if hasattr(self, "cancel_scan_button") and self.cancel_scan_button is not None:
+            self.cancel_scan_button.setVisible(True)
+            self.cancel_scan_button.setEnabled(True)
         self._yield_ui_events()
 
     def _finish_scan_progress(self):
@@ -2612,21 +2788,15 @@ class ModManagerApp(QtWidgets.QWidget):
             self.scan_progress_bar.setVisible(False)
         if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
             self.scan_count_label.setVisible(False)
+        if hasattr(self, "cancel_scan_button") and self.cancel_scan_button is not None:
+            self.cancel_scan_button.setVisible(False)
         self._yield_ui_events()
 
-    def _handle_scan_progress(self, processed, total, current_path):
+    def _on_scan_progress(self, percentage):
         if hasattr(self, "scan_progress_bar") and self.scan_progress_bar is not None:
-            if total:
-                if self.scan_progress_bar.maximum() != total:
-                    self.scan_progress_bar.setMaximum(total)
-                self.scan_progress_bar.setValue(min(processed, total))
-            else:
-                self.scan_progress_bar.setMaximum(0)
+            self.scan_progress_bar.setValue(max(0, min(int(percentage), 100)))
         if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
-            if total:
-                self.scan_count_label.setText(f"Objets scannés : {processed}/{total}")
-            else:
-                self.scan_count_label.setText(f"Objets scannés : {processed}")
+            self.scan_count_label.setText(f"{max(0, min(int(percentage), 100))} %")
             self.scan_count_label.setVisible(True)
         self._yield_ui_events()
 
@@ -2774,6 +2944,66 @@ class ModManagerApp(QtWidgets.QWidget):
             if hasattr(self, "table"):
                 self.table.setRowCount(0)
 
+    def _start_scan(self, roots, *, update_last_scanned=False, status_message="Scan en cours..."):
+        valid_roots = [path for path in roots if path and os.path.isdir(path)]
+        if not valid_roots:
+            QtWidgets.QMessageBox.critical(self, "Erreur", "Sélectionne un dossier valide dans la configuration.")
+            return
+        if self.scan_thread is not None and self.scan_thread.isRunning():
+            self._pending_scan_request = (
+                list(valid_roots),
+                {"update_last_scanned": update_last_scanned, "status_message": status_message},
+            )
+            self._cancel_for_restart = True
+            if self._scan_stop_flag is not None:
+                self._scan_stop_flag.set()
+            return
+
+        self._pending_scan_request = None
+
+        if update_last_scanned and valid_roots:
+            self.last_scanned_directory = valid_roots[0]
+
+        self._pending_rows = []
+        self._scan_buffer_timer.stop()
+        self.all_data_rows = []
+        self.filtered_rows = []
+        self._cache_clear_triggered_this_refresh = False
+        if hasattr(self, "table"):
+            table = self.table
+            sorting_enabled = table.isSortingEnabled()
+            table.setSortingEnabled(False)
+            table.clearContents()
+            table.setRowCount(0)
+            table.setSortingEnabled(sorting_enabled)
+
+        self._update_scan_status(status_message)
+        self._start_scan_progress()
+        self._set_scan_controls_enabled(False)
+        self._user_cancelled_scan = False
+        self._cancel_for_restart = False
+        self._scan_error_reported = False
+
+        settings_snapshot = copy.deepcopy(self.settings)
+        settings_snapshot.setdefault("ignored_mods", list(self.settings.get("ignored_mods", [])))
+        settings_snapshot["_version_releases"] = [
+            (version, release.isoformat()) for version, release in self.version_releases.items()
+        ]
+        cache_snapshot = load_mod_scan_cache() or {}
+
+        self._scan_stop_flag = threading.Event()
+        self.scan_worker = ScanWorker(valid_roots, settings_snapshot, cache_snapshot, self._scan_stop_flag)
+        self.scan_thread = QtCore.QThread(self)
+        self.scan_worker.moveToThread(self.scan_thread)
+        self.scan_worker.progress.connect(self._on_scan_progress)
+        self.scan_worker.chunkReady.connect(self._on_scan_chunk_ready)
+        self.scan_worker.finished.connect(self._on_scan_finished)
+        self.scan_worker.error.connect(self._on_scan_error)
+        self.scan_thread.started.connect(self.scan_worker.run)
+        self.scan_thread.finished.connect(self.scan_thread.deleteLater)
+        self.scan_worker.finished.connect(self.scan_worker.deleteLater)
+        self.scan_thread.start()
+
     def refresh_tree(self):
         folder = self.settings.get("mod_directory", "")
         if not folder or not os.path.isdir(folder):
@@ -2783,47 +3013,12 @@ class ModManagerApp(QtWidgets.QWidget):
         save_settings(self.settings)
         self.update_mod_directory_label()
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
-        self.last_scanned_directory = folder
-        self._update_scan_status("Scan en cours...")
-        self._start_scan_progress()
-        try:
-            rows, scan_changed = generate_data_rows(
-                folder,
-                self.settings,
-                self.version_releases,
-                progress_callback=self._handle_scan_progress,
-                yield_callback=self._yield_ui_events,
-            )
-        finally:
-            self._finish_scan_progress()
-        self.populate_table(rows)
-        self._update_scan_status("")
-        self._cache_clear_triggered_this_refresh = False
-        if scan_changed:
-            self._cache_clear_triggered_this_refresh = True
-            self.clear_sims4_cache()
+        self._start_scan([folder], update_last_scanned=True)
 
     def refresh_table_only(self):
         if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
             self.ignored_mods = set(self.settings.get("ignored_mods", []))
-            self._update_scan_status("Scan en cours...")
-            self._cache_clear_triggered_this_refresh = False
-            self._start_scan_progress()
-            try:
-                rows, scan_changed = generate_data_rows(
-                    self.last_scanned_directory,
-                    self.settings,
-                    self.version_releases,
-                    progress_callback=self._handle_scan_progress,
-                    yield_callback=self._yield_ui_events,
-                )
-            finally:
-                self._finish_scan_progress()
-            self.populate_table(rows)
-            self._update_scan_status("")
-            if scan_changed:
-                self._cache_clear_triggered_this_refresh = True
-                self.clear_sims4_cache()
+            self._start_scan([self.last_scanned_directory], update_last_scanned=False)
 
     def clear_sims4_cache(self):
         cache_directory = self.settings.get("sims_cache_directory", "")
@@ -3054,25 +3249,40 @@ class ModManagerApp(QtWidgets.QWidget):
     def apply_search_filter(self, _text=None):
         self._apply_search_filter()
 
-    def _apply_search_filter(self):
+    def _apply_search_filter(self, appended_rows=None):
         query = ""
         if hasattr(self, "search_edit"):
             query = self.search_edit.text().strip().lower()
 
         show_search_results = self.settings.get("show_search_results", True)
 
-        if not show_search_results:
-            filtered_rows = list(self.all_data_rows)
-        elif not query:
-            filtered_rows = list(self.all_data_rows)
+        if appended_rows is None:
+            if not show_search_results:
+                filtered_rows = list(self.all_data_rows)
+            elif not query:
+                filtered_rows = list(self.all_data_rows)
+            else:
+                filtered_rows = [
+                    row
+                    for row in self.all_data_rows
+                    if self._row_matches_query(row, query)
+                ]
+            self.filtered_rows = filtered_rows
+            self._render_table(filtered_rows)
         else:
-            filtered_rows = [
-                row
-                for row in self.all_data_rows
-                if self._row_matches_query(row, query)
-            ]
-
-        self._render_table(filtered_rows)
+            matching_rows = []
+            for row in appended_rows:
+                if not show_search_results:
+                    matching_rows.append(row)
+                elif not query:
+                    matching_rows.append(row)
+                elif self._row_matches_query(row, query):
+                    matching_rows.append(row)
+            if not matching_rows:
+                return
+            start_index = len(self.filtered_rows)
+            self.filtered_rows.extend(matching_rows)
+            self._append_rows_to_table(matching_rows, start_index)
 
     def _row_matches_query(self, row, query):
         for value in self._gather_searchable_values(row):
@@ -3098,6 +3308,41 @@ class ModManagerApp(QtWidgets.QWidget):
         values.extend(str(path) for path in row.get("paths", []))
         return [value.lower() for value in values if value]
 
+    def _populate_table_row(self, row_index, row):
+        table = self.table
+        columns = [
+            row.get("status", ""),
+            row.get("package", ""),
+            row.get("package_date", ""),
+            row.get("script", ""),
+            row.get("script_date", ""),
+            row.get("version", ""),
+            row.get("confidence", ""),
+        ]
+        for col_idx, value in enumerate(columns):
+            item = QtWidgets.QTableWidgetItem(str(value))
+            if col_idx == 0:
+                item.setData(QtCore.Qt.UserRole, tuple(row.get("ignore_candidates") or []))
+                item.setData(QtCore.Qt.UserRole + 1, tuple(row.get("paths") or []))
+            if col_idx == 6:
+                item.setToolTip(row.get("confidence_tooltip", ""))
+            table.setItem(row_index, col_idx, item)
+
+        ignored = row.get("ignored", False)
+        ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
+        ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
+        ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
+        table.setItem(row_index, 7, ignore_item)
+
+        ignore_checkbox = QtWidgets.QCheckBox()
+        ignore_checkbox.stateChanged.connect(
+            partial(self.update_ignore_mod, tuple(row.get("ignore_candidates") or []))
+        )
+        ignore_checkbox.blockSignals(True)
+        ignore_checkbox.setChecked(ignored)
+        ignore_checkbox.blockSignals(False)
+        table.setCellWidget(row_index, 7, ignore_checkbox)
+
     def _render_table(self, rows):
         header = self.table.horizontalHeader()
         sorting_enabled = self.table.isSortingEnabled()
@@ -3111,44 +3356,40 @@ class ModManagerApp(QtWidgets.QWidget):
                 table.clearContents()
             table.setRowCount(len(rows))
             for row_index, row in enumerate(rows):
-                columns = [
-                    row.get("status", ""),
-                    row.get("package", ""),
-                    row.get("package_date", ""),
-                    row.get("script", ""),
-                    row.get("script_date", ""),
-                    row.get("version", ""),
-                    row.get("confidence", ""),
-                ]
-                for col_idx, value in enumerate(columns):
-                    item = QtWidgets.QTableWidgetItem(str(value))
-                    if col_idx == 0:
-                        item.setData(QtCore.Qt.UserRole, tuple(row.get("ignore_candidates") or []))
-                        item.setData(QtCore.Qt.UserRole + 1, tuple(row.get("paths") or []))
-                    if col_idx == 6:
-                        item.setToolTip(row.get("confidence_tooltip", ""))
-                    table.setItem(row_index, col_idx, item)
-
-                ignored = row.get("ignored", False)
-                ignore_item = QtWidgets.QTableWidgetItem("Oui" if ignored else "Non")
-                ignore_item.setData(QtCore.Qt.UserRole, 1 if ignored else 0)
-                ignore_item.setFlags(QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable)
-                table.setItem(row_index, 7, ignore_item)
-
-                ignore_checkbox = QtWidgets.QCheckBox()
-                ignore_checkbox.stateChanged.connect(
-                    partial(self.update_ignore_mod, tuple(row.get("ignore_candidates") or []))
-                )
-                ignore_checkbox.blockSignals(True)
-                ignore_checkbox.setChecked(ignored)
-                ignore_checkbox.blockSignals(False)
-                table.setCellWidget(row_index, 7, ignore_checkbox)
-
+                self._populate_table_row(row_index, row)
                 if row_index % 50 == 0:
                     self._yield_ui_events()
         finally:
             table.setUpdatesEnabled(True)
 
+        table.setSortingEnabled(sorting_enabled)
+        if sorting_enabled and rows:
+            table.sortByColumn(sort_section, sort_order)
+        table.viewport().update()
+        self._yield_ui_events()
+
+    def _append_rows_to_table(self, rows, start_index):
+        if not rows:
+            return
+        table = self.table
+        header = table.horizontalHeader()
+        sorting_enabled = table.isSortingEnabled()
+        sort_section = header.sortIndicatorSection()
+        sort_order = header.sortIndicatorOrder()
+        table.setSortingEnabled(False)
+        table.setUpdatesEnabled(False)
+        try:
+            new_count = start_index + len(rows)
+            if table.rowCount() < start_index:
+                table.setRowCount(start_index)
+            table.setRowCount(new_count)
+            for offset, row in enumerate(rows):
+                row_index = start_index + offset
+                self._populate_table_row(row_index, row)
+                if row_index % 50 == 0:
+                    self._yield_ui_events()
+        finally:
+            table.setUpdatesEnabled(True)
         table.setSortingEnabled(sorting_enabled)
         if sorting_enabled and rows:
             table.sortByColumn(sort_section, sort_order)
@@ -3302,6 +3543,107 @@ class ModManagerApp(QtWidgets.QWidget):
         self.settings["ignored_mods"] = sorted(self.ignored_mods)
         save_settings(self.settings)
         self.refresh_table_only()
+
+    def _set_scan_controls_enabled(self, enabled):
+        widgets = [
+            getattr(self, "configuration_button", None),
+            getattr(self, "mod_installer_button", None),
+            getattr(self, "tools_button", None),
+            getattr(self, "refresh_button", None),
+            getattr(self, "export_button", None),
+            getattr(self, "clear_cache_button", None),
+            getattr(self, "grab_logs_button", None),
+            getattr(self, "launch_button", None),
+            getattr(self, "kill_button", None),
+        ]
+        for widget in widgets:
+            if widget is not None:
+                widget.setEnabled(enabled)
+
+    def _on_scan_chunk_ready(self, rows):
+        if not rows:
+            return
+        self._pending_rows.extend(rows)
+        if not self._scan_buffer_timer.isActive():
+            self._scan_buffer_timer.start()
+
+    def _flush_scan_buffer(self):
+        if not self._pending_rows:
+            return
+        pending = self._pending_rows
+        self._pending_rows = []
+        self.all_data_rows.extend(pending)
+        self._apply_search_filter(appended_rows=pending)
+
+    def _cleanup_scan_thread(self):
+        if self.scan_thread is not None:
+            self.scan_thread.quit()
+            self.scan_thread.wait()
+            self.scan_thread = None
+        self.scan_worker = None
+        self._scan_stop_flag = None
+
+    def _on_scan_finished(self, success, message):
+        worker = self.scan_worker
+        self._scan_buffer_timer.stop()
+        self._flush_scan_buffer()
+        snapshot_changed = bool(worker and getattr(worker, "snapshot_changed", False))
+        self._cleanup_scan_thread()
+        self._finish_scan_progress()
+        self._set_scan_controls_enabled(True)
+        if success:
+            self._update_scan_status("")
+            if snapshot_changed:
+                self._cache_clear_triggered_this_refresh = True
+                self.clear_sims4_cache()
+            else:
+                self._cache_clear_triggered_this_refresh = False
+            if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
+                self.scan_count_label.setText(f"{len(self.all_data_rows)} mods")
+                self.scan_count_label.setVisible(True)
+        else:
+            if message == "Cancelled" and self._cancel_for_restart and self._pending_scan_request:
+                roots, options = self._pending_scan_request
+                self._pending_scan_request = None
+                self._cancel_for_restart = False
+                QtCore.QTimer.singleShot(0, lambda: self._start_scan(roots, **options))
+                return
+            self._update_scan_status("")
+            if (
+                message
+                and message not in {"Cancelled", "OK"}
+                and not self._user_cancelled_scan
+                and not self._scan_error_reported
+            ):
+                QtWidgets.QMessageBox.warning(self, "Erreur", message)
+        self._pending_scan_request = None
+        self._cancel_for_restart = False
+        self._user_cancelled_scan = False
+        self._scan_error_reported = False
+
+    def _on_scan_error(self, message):
+        if message:
+            QtWidgets.QMessageBox.critical(self, "Erreur", message)
+            self._scan_error_reported = True
+
+    def cancel_scan(self):
+        if self._scan_stop_flag is None or self._scan_stop_flag.is_set():
+            return
+        self._user_cancelled_scan = True
+        self._pending_scan_request = None
+        self._cancel_for_restart = False
+        self._scan_stop_flag.set()
+        self._update_scan_status("Annulation en cours...")
+        if hasattr(self, "cancel_scan_button") and self.cancel_scan_button is not None:
+            self.cancel_scan_button.setEnabled(False)
+
+    def closeEvent(self, event):
+        if self._scan_stop_flag is not None and not self._scan_stop_flag.is_set():
+            self._scan_stop_flag.set()
+        if self.scan_thread is not None and self.scan_thread.isRunning():
+            self.scan_thread.quit()
+            self.scan_thread.wait()
+        super().closeEvent(event)
 
     def export_current(self):
         rows = []
