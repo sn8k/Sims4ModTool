@@ -1,13 +1,13 @@
 # Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.16
-- **Dernière mise à jour :** 22/10/2025 07:24 UTC
+- **Version de l'application :** v3.17
+- **Dernière mise à jour :** 22/10/2025 08:15 UTC
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
 - Analyse récursive du dossier de mods avec détection des paires `.package` / `.ts4script`.
-- Calcul automatique de la colonne **Version** à partir du nom des fichiers `.ts4script` se terminant par le motif `_v_<numéro>`.
+- Estimation automatique de la colonne **Version** à partir de la dernière date connue du mod et de la table de sorties Sims 4.
 - Marquage des mods ignorés (persisté dans `ignorelist.txt`) et filtres dynamiques configurables via plages de versions (sélection des patchs de départ et d'arrivée).
 - Export des résultats au format Excel (`.xlsx`) avec conservation de toutes les colonnes visibles.
 - Nettoyage guidé du cache Sims 4 via le bouton **Clear Sims4 Cache**.
@@ -51,10 +51,10 @@ Les paramètres sont enregistrés dans `settings.json` dès la sauvegarde de la 
 
 ## Lecture du tableau des mods
 La table principale affiche une ligne par mod détecté avec les colonnes suivantes :
-1. **État** — `X` si un duo `.package`/`.ts4script` est présent, `MP` pour `.package` seul, `MS` pour `.ts4script` seul.
+1. **État** — `X` si un duo `.package`/`.ts4script` est présent, `MS` lorsqu'il manque le `.ts4script`, `MP` lorsqu'il manque le `.package`.
 2. **Fichier .package** et **Date .package**.
 3. **Fichier .ts4script** et **Date .ts4script**.
-4. **Version** — déduite du nom du fichier `.ts4script` (ex. `MonMod_v_1.02.ts4script` → `1.02`).
+4. **Version** — estimée grâce à la date la plus récente du mod et aux informations de patch connues (ex. un fichier daté du 10/10/2025 sera associé au patch `1.118.257.1020`).
 5. **Ignoré** — cochez pour masquer un mod lors des prochains scans (persisté dans `ignorelist.txt`).
 
 Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de supprimer ou de lancer une recherche Google sur le mod sélectionné.

@@ -14,8 +14,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.16"
-APP_VERSION_DATE = "22/10/2025 07:24 UTC"
+APP_VERSION = "v3.17"
+APP_VERSION_DATE = "22/10/2025 08:15 UTC"
 
 
 DEFAULT_VERSION_RELEASES = [
@@ -34,9 +34,6 @@ DEFAULT_VERSION_RELEASES = [
     {"version": "1.118.242.1030", "release_date": "2025-09-18"},
     {"version": "1.118.257.1020", "release_date": "2025-10-02"},
 ]
-
-
-VERSION_PATTERN = re.compile(r"_v_([0-9]+(?:[._-][0-9A-Za-z]+)*)$", re.IGNORECASE)
 
 
 def parse_release_date(date_str):
@@ -114,12 +111,21 @@ def merge_version_releases(custom_releases):
     return OrderedDict(sorted_items)
 
 
-def extract_version_from_script_name(script_name):
-    if not script_name:
+def estimate_version_from_dates(package_date, script_date, version_releases):
+    candidates = [value for value in (package_date, script_date) if value is not None]
+    if not candidates:
         return ""
-    base_name = os.path.splitext(script_name)[0]
-    match = VERSION_PATTERN.search(base_name)
-    return match.group(1) if match else ""
+    latest_datetime = max(candidates)
+    latest_date = latest_datetime.date()
+    estimated_version = ""
+    for version, release_date in version_releases.items():
+        if release_date <= latest_date:
+            estimated_version = version
+        elif not estimated_version:
+            return version
+        else:
+            break
+    return estimated_version
 
 
 def format_datetime(value):
@@ -250,10 +256,12 @@ def generate_data_rows(directory, settings, version_releases):
         script_path = ts4script_files.get(script_file)
         script_date = get_file_date(script_path) if script_path else None
 
+        mod_latest_date = max((date for date in (pkg_date, script_date) if date is not None), default=None)
+
         # Appliquer filtres
-        if end_limit and pkg_date > end_limit:
+        if end_limit and mod_latest_date and mod_latest_date > end_limit:
             continue
-        if start_limit and pkg_date < start_limit:
+        if start_limit and mod_latest_date and mod_latest_date < start_limit:
             continue
         if settings["filter_package_and_ts4script"] and not script_path:
             continue
@@ -263,10 +271,8 @@ def generate_data_rows(directory, settings, version_releases):
         if ignored and not show_ignored:
             continue
 
-        status = "MP"
-        if script_path:
-            status = "X"
-        version = extract_version_from_script_name(script_file if script_path else "")
+        status = "X" if script_path else "MS"
+        version = estimate_version_from_dates(pkg_date, script_date, version_releases)
 
         data_rows.append({
             "status": status,
@@ -289,9 +295,9 @@ def generate_data_rows(directory, settings, version_releases):
 
         script_date = get_file_date(script_path)
 
-        if end_limit and script_date > end_limit:
+        if end_limit and script_date and script_date > end_limit:
             continue
-        if start_limit and script_date < start_limit:
+        if start_limit and script_date and script_date < start_limit:
             continue
         if settings["filter_package_and_ts4script"]:
             continue
@@ -299,9 +305,9 @@ def generate_data_rows(directory, settings, version_releases):
         ignored = any(name in ignored_mods for name in candidates)
         if ignored and not show_ignored:
             continue
-        status = "MS"
+        status = "MP"
 
-        version = extract_version_from_script_name(script)
+        version = estimate_version_from_dates(None, script_date, version_releases)
 
         data_rows.append({
             "status": status,
@@ -650,6 +656,10 @@ class ModManagerApp(QtWidgets.QWidget):
 
         layout.addLayout(search_layout)
 
+        self.scan_status_label = QtWidgets.QLabel("", self)
+        self.scan_status_label.setVisible(False)
+        layout.addWidget(self.scan_status_label)
+
         # Table des mods
         self.table = QtWidgets.QTableWidget(self)
         self.table.setColumnCount(7)
@@ -715,6 +725,12 @@ class ModManagerApp(QtWidgets.QWidget):
         # Final
         self.setLayout(layout)
         self.update_launch_button_state()
+
+    def _update_scan_status(self, message):
+        if hasattr(self, "scan_status_label") and self.scan_status_label is not None:
+            self.scan_status_label.setText(message)
+            self.scan_status_label.setVisible(bool(message))
+            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.AllEvents, 50)
 
     def populate_version_combos(self):
         if not hasattr(self, "version_start_combo"):
@@ -831,14 +847,18 @@ class ModManagerApp(QtWidgets.QWidget):
         self.update_mod_directory_label()
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
         self.last_scanned_directory = folder
+        self._update_scan_status("Scan en cours...")
         rows = generate_data_rows(folder, self.settings, self.version_releases)
         self.populate_table(rows)
+        self._update_scan_status("")
 
     def refresh_table_only(self):
         if self.last_scanned_directory and os.path.isdir(self.last_scanned_directory):
             self.ignored_mods = set(self.settings.get("ignored_mods", []))
+            self._update_scan_status("Scan en cours...")
             rows = generate_data_rows(self.last_scanned_directory, self.settings, self.version_releases)
             self.populate_table(rows)
+            self._update_scan_status("")
 
     def clear_sims4_cache(self):
         cache_directory = self.settings.get("sims_cache_directory", "")
