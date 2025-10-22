@@ -1,8 +1,8 @@
 # Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.25
-- **Dernière mise à jour :** 22/10/2025 10:19 UTC
+- **Version de l'application :** v3.32
+- **Dernière mise à jour :** 22/10/2025 16:46 UTC
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales

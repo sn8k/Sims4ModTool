@@ -22,8 +22,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.31"
-APP_VERSION_DATE = "22/10/2025 11:54 UTC"
+APP_VERSION = "v3.32"
+APP_VERSION_DATE = "22/10/2025 16:46 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -790,48 +790,70 @@ def scan_directory(directory, progress_callback=None):
     ts4script_files = {}
     snapshot_entries = []
     normalized_root = os.path.abspath(directory)
-    relevant_files = []
-    for root, dirs, files in os.walk(directory):
-        for file in files:
-            lower_name = file.lower()
-            if lower_name.endswith((".package", ".ts4script")):
-                full_path = os.path.join(root, file)
-                relevant_files.append((file, lower_name, full_path))
 
-    total_files = len(relevant_files)
-    if progress_callback is not None:
+    def _emit_progress(processed, total, current_path):
+        if progress_callback is None:
+            return
         try:
-            progress_callback(0, total_files, "")
+            progress_callback(processed, total, current_path)
         except Exception:
             pass
 
-    for index, (file, lower_name, full_path) in enumerate(relevant_files, start=1):
-        if lower_name.endswith(".package"):
-            package_files[file] = full_path
-        else:
-            ts4script_files[file] = full_path
+    processed_files = 0
+    total_files = 0
+    _emit_progress(processed_files, total_files, "")
+
+    directories = [normalized_root]
+    while directories:
+        current_dir = directories.pop()
         try:
-            stat_result = os.stat(full_path)
-        except OSError:
+            with os.scandir(current_dir) as iterator:
+                for entry in iterator:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            directories.append(entry.path)
+                            continue
+                        if not entry.is_file(follow_symlinks=False):
+                            continue
+                    except OSError:
+                        continue
+
+                    lower_name = entry.name.lower()
+                    if not lower_name.endswith((".package", ".ts4script")):
+                        continue
+
+                    full_path = entry.path
+                    total_files += 1
+                    if lower_name.endswith(".package"):
+                        package_files[entry.name] = full_path
+                    else:
+                        ts4script_files[entry.name] = full_path
+
+                    try:
+                        stat_result = entry.stat(follow_symlinks=False)
+                    except OSError:
+                        continue
+
+                    relative_path = os.path.relpath(full_path, normalized_root)
+                    snapshot_entries.append({
+                        "path": relative_path.replace("\\", "/"),
+                        "mtime": int(stat_result.st_mtime),
+                        "size": int(stat_result.st_size),
+                        "type": "package" if lower_name.endswith(".package") else "ts4script",
+                    })
+
+                    processed_files += 1
+                    _emit_progress(processed_files, total_files, full_path)
+        except (FileNotFoundError, NotADirectoryError, PermissionError):
             continue
-        relative_path = os.path.relpath(full_path, normalized_root)
-        snapshot_entries.append({
-            "path": relative_path.replace("\\", "/"),
-            "mtime": int(stat_result.st_mtime),
-            "size": int(stat_result.st_size),
-            "type": "package" if lower_name.endswith(".package") else "ts4script",
-        })
-        if progress_callback is not None:
-            try:
-                progress_callback(index, total_files, full_path)
-            except Exception:
-                pass
+
     snapshot_entries.sort(key=lambda item: item["path"].casefold())
     snapshot = {
         "root": normalized_root.replace("\\", "/"),
         "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
         "entries": snapshot_entries,
     }
+    _emit_progress(processed_files, total_files, "")
     return package_files, ts4script_files, snapshot
 
 
