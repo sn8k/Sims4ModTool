@@ -5,6 +5,7 @@ import shutil
 import shlex
 import re
 import subprocess
+import zipfile
 from collections import OrderedDict
 from functools import partial
 from urllib.parse import quote_plus
@@ -15,8 +16,9 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.18"
-APP_VERSION_DATE = "22/10/2025 08:00 UTC"
+APP_VERSION = "v3.19"
+APP_VERSION_DATE = "22/10/2025 08:17 UTC"
+INSTALLED_MODS_PATH = "installed_mods.json"
 
 
 DEFAULT_VERSION_RELEASES = [
@@ -149,6 +151,59 @@ def save_ignore_list(ignored_mods, path=IGNORE_LIST_PATH):
     with open(path, "w", encoding="utf-8") as f:
         for mod_name in sorted(set(ignored_mods)):
             f.write(f"{mod_name}\n")
+
+
+def load_installed_mods(path=INSTALLED_MODS_PATH):
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    normalized_entries = []
+    for entry in data if isinstance(data, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or entry.get("mod_name") or "").strip()
+        target_folder = str(entry.get("target_folder") or "").strip()
+        if not name or not target_folder:
+            continue
+        normalized_entries.append({
+            "name": name,
+            "type": str(entry.get("type") or "").strip(),
+            "installed_at": str(entry.get("installed_at") or "").strip(),
+            "target_folder": target_folder,
+            "source": str(entry.get("source") or "").strip(),
+        })
+
+    normalized_entries.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
+    return normalized_entries
+
+
+def save_installed_mods(installed_mods, path=INSTALLED_MODS_PATH):
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(installed_mods, handle, indent=4, ensure_ascii=False)
+
+
+def sanitize_mod_folder_name(file_name):
+    base_name = os.path.splitext(os.path.basename(file_name))[0]
+    sanitized = re.sub(r"[\\/:*?\"<>|]", "_", base_name).strip()
+    return sanitized or "mod"
+
+
+def format_installation_display(iso_value):
+    if not iso_value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(iso_value)
+    except ValueError:
+        return iso_value
+    return parsed.strftime("%d/%m/%Y %H:%M UTC")
 
 def get_file_date(file_path):
     timestamp = os.path.getmtime(file_path)
@@ -577,6 +632,212 @@ class ConfigurationDialog(QtWidgets.QDialog):
         self.accept()
 
 
+class ModInstallerDialog(QtWidgets.QDialog):
+    def __init__(self, parent=None, mod_directory=""):
+        super().__init__(parent)
+        self.setWindowTitle("Mod Installer")
+        self.setModal(True)
+        self.resize(720, 420)
+        self.setAcceptDrops(True)
+
+        self.mod_directory = mod_directory
+        self.installations_performed = False
+        self.installed_mods = load_installed_mods()
+
+        layout = QtWidgets.QVBoxLayout(self)
+
+        info_label = QtWidgets.QLabel(
+            "Glissez-déposez un fichier .package, .ts4script ou .zip pour l'installer dans le dossier des mods configuré."
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        mod_dir_display = mod_directory if mod_directory else "(dossier non défini)"
+        self.target_directory_label = QtWidgets.QLabel(f"Dossier cible : {mod_dir_display}")
+        self.target_directory_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+        layout.addWidget(self.target_directory_label)
+
+        self.drop_label = QtWidgets.QLabel("Déposez vos fichiers ici")
+        self.drop_label.setAlignment(QtCore.Qt.AlignCenter)
+        self.drop_label.setMinimumHeight(80)
+        self._drop_idle_style = "QLabel { border: 2px dashed #aaaaaa; padding: 24px; background-color: #3a3a3a; }"
+        self._drop_active_style = "QLabel { border: 2px solid #00aa88; padding: 24px; background-color: #2a2a2a; }"
+        self.drop_label.setStyleSheet(self._drop_idle_style)
+        layout.addWidget(self.drop_label)
+
+        self.table = QtWidgets.QTableWidget(self)
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels([
+            "Mod",
+            "Type",
+            "Installé le",
+            "Dossier",
+        ])
+        self.table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+        self.table.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        for column in range(1, self.table.columnCount()):
+            self.table.horizontalHeader().setSectionResizeMode(column, QtWidgets.QHeaderView.ResizeToContents)
+        layout.addWidget(self.table, stretch=1)
+
+        close_button = QtWidgets.QPushButton("Fermer", self)
+        close_button.clicked.connect(self.accept)
+        layout.addWidget(close_button, alignment=QtCore.Qt.AlignRight)
+
+        self.refresh_table()
+
+    def dragEnterEvent(self, event):
+        if self._contains_supported_files(event):
+            event.acceptProposedAction()
+            self._set_drop_active(True)
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        super().dragLeaveEvent(event)
+        self._set_drop_active(False)
+
+    def dropEvent(self, event):
+        if not event.mimeData().hasUrls():
+            event.ignore()
+            self._set_drop_active(False)
+            return
+
+        file_paths = [url.toLocalFile() for url in event.mimeData().urls() if url.isLocalFile()]
+        success_entries = []
+        error_messages = []
+
+        for path in file_paths:
+            success, message = self.install_mod_from_path(path)
+            if success and message:
+                success_entries.append(message)
+            elif (not success) and message:
+                error_messages.append(message)
+
+        if success_entries:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Installation terminée",
+                "\n".join(success_entries),
+            )
+        if error_messages:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Installation incomplète",
+                "\n".join(error_messages),
+            )
+
+        event.acceptProposedAction()
+        self._set_drop_active(False)
+
+    def _set_drop_active(self, active):
+        self.drop_label.setStyleSheet(self._drop_active_style if active else self._drop_idle_style)
+
+    def _contains_supported_files(self, event):
+        if not event.mimeData().hasUrls():
+            return False
+        for url in event.mimeData().urls():
+            if not url.isLocalFile():
+                continue
+            if self._is_supported_extension(url.toLocalFile()):
+                return True
+        return False
+
+    @staticmethod
+    def _is_supported_extension(file_path):
+        return os.path.splitext(file_path)[1].lower() in {".package", ".ts4script", ".zip"}
+
+    def install_mod_from_path(self, file_path):
+        if not os.path.isfile(file_path):
+            return False, f"Fichier introuvable : {file_path}"
+
+        if not self._is_supported_extension(file_path):
+            return False, f"Extension non supportée : {os.path.basename(file_path)}"
+
+        if not self.mod_directory or not os.path.isdir(self.mod_directory):
+            return False, "Définissez d'abord un dossier de mods valide dans la configuration."
+
+        sanitized_name = sanitize_mod_folder_name(file_path)
+        target_folder = os.path.join(self.mod_directory, sanitized_name)
+        display_name = os.path.splitext(os.path.basename(file_path))[0]
+        extension = os.path.splitext(file_path)[1].lower()
+
+        if os.path.exists(target_folder):
+            response = QtWidgets.QMessageBox.question(
+                self,
+                "Mod déjà installé",
+                (
+                    f"Le mod '{sanitized_name}' existe déjà dans le dossier des mods.\n"
+                    "Voulez-vous le mettre à jour avec le fichier sélectionné ?"
+                ),
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes,
+            )
+            if response != QtWidgets.QMessageBox.Yes:
+                return False, f"Installation de '{display_name}' annulée."
+            try:
+                shutil.rmtree(target_folder)
+            except OSError as exc:
+                return False, f"Impossible de nettoyer le dossier existant : {exc}"
+
+        try:
+            if extension == ".zip" and not zipfile.is_zipfile(file_path):
+                return False, f"Le fichier n'est pas une archive zip valide : {os.path.basename(file_path)}"
+
+            os.makedirs(target_folder, exist_ok=True)
+            if extension in {".package", ".ts4script"}:
+                destination_path = os.path.join(target_folder, os.path.basename(file_path))
+                shutil.copy2(file_path, destination_path)
+                mod_type = f"fichier {extension}"
+            else:
+                with zipfile.ZipFile(file_path, "r") as archive:
+                    archive.extractall(target_folder)
+                mod_type = "archive .zip"
+        except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
+            return False, f"Erreur lors de l'installation : {exc}"
+
+        installed_at = datetime.utcnow().replace(microsecond=0).isoformat()
+        self._record_installation({
+            "name": display_name,
+            "type": mod_type,
+            "installed_at": installed_at,
+            "target_folder": target_folder,
+            "source": os.path.basename(file_path),
+        })
+
+        self.installations_performed = True
+        return True, f"'{display_name}' installé avec succès."
+
+    def _record_installation(self, entry):
+        target = entry.get("target_folder")
+        if not target:
+            return
+        replaced = False
+        for existing in self.installed_mods:
+            if existing.get("target_folder") == target:
+                existing.update(entry)
+                replaced = True
+                break
+        if not replaced:
+            self.installed_mods.append(entry)
+        self.installed_mods.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
+        save_installed_mods(self.installed_mods)
+        self.refresh_table()
+
+    def refresh_table(self):
+        self.table.setRowCount(len(self.installed_mods))
+        for row, entry in enumerate(self.installed_mods):
+            mod_name = entry.get("name", "")
+            mod_type = entry.get("type", "")
+            installed_at = format_installation_display(entry.get("installed_at", ""))
+            folder_name = os.path.basename(entry.get("target_folder", ""))
+
+            for column, value in enumerate((mod_name, mod_type, installed_at, folder_name)):
+                item = QtWidgets.QTableWidgetItem(value)
+                item.setFlags(item.flags() ^ QtCore.Qt.ItemIsEditable)
+                self.table.setItem(row, column, item)
+
+
 class ModManagerApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
@@ -708,6 +969,9 @@ class ModManagerApp(QtWidgets.QWidget):
         self.configuration_button = QtWidgets.QPushButton("Configuration", self)
         self.configuration_button.clicked.connect(self.open_configuration)
 
+        self.mod_installer_button = QtWidgets.QPushButton("Mod Installer", self)
+        self.mod_installer_button.clicked.connect(self.open_mod_installer)
+
         self.refresh_button = QtWidgets.QPushButton("Analyser / Rafraîchir", self)
         self.refresh_button.clicked.connect(self.refresh_tree)
 
@@ -731,6 +995,7 @@ class ModManagerApp(QtWidgets.QWidget):
 
         button_layout = QtWidgets.QHBoxLayout()
         button_layout.addWidget(self.configuration_button)
+        button_layout.addWidget(self.mod_installer_button)
         button_layout.addWidget(self.tools_button)
         button_layout.addWidget(self.refresh_button)
         button_layout.addWidget(self.export_button)
@@ -837,6 +1102,12 @@ class ModManagerApp(QtWidgets.QWidget):
     def open_configuration(self):
         dialog = ConfigurationDialog(self, dict(self.settings))
         dialog.exec_()
+
+    def open_mod_installer(self):
+        dialog = ModInstallerDialog(self, self.settings.get("mod_directory", ""))
+        dialog.exec_()
+        if dialog.installations_performed:
+            self.refresh_tree()
 
     def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files):
         previous_mod_directory = self.settings.get("mod_directory", "")
