@@ -92,3 +92,31 @@ Verrouillage des cases à cocher dans les tableaux ou listes avec une gestion d'
 Résumé :
 
 Ce fichier agents.md définit les différents agents qui interagissent dans le gestionnaire de mods Sims 4. Chaque agent a un rôle et des responsabilités spécifiques, et l'agent principal ModManager coordonne les autres agents pour fournir une expérience utilisateur cohérente.
+
+
+
+******************************************
+
+🛠 Règles techniques / installation / organisation du dossier « Mods »
+
+Voici ce que la communauté (et partiellement EA) recommande/précise :
+
+Règle	Détail
+- Types de fichiers pris en charge	En gros : .package (custom content, objets, CGA etc), .ts4script (mods script), parfois .txt ou .log pour instructions/info. 
+- Fichier Resource.cfg	Présent dans le dossier …\Documents\Electronic Arts\The Sims 4\Mods, sert à dire au jeu jusqu’à combien de sous-dossiers il doit lire les fichiers .package. 
+- Profondeur maximale de sous-dossiers	Pour les fichiers .package, la profondeur est souvent “jusqu’à cinq niveaux” (Mods → sous-dossier1 → … → sous-dossier5). 
+- Pour les mods avec .ts4script, on recommande de ne pas aller aussi profondément — souvent un seul niveau ou dans le dossier racine du Mods. 
+- Associer scripts et packages dans le même dossier	Si un mod inclut un .ts4script, le fichier .package associé et le script doivent être dans le même dossier pour éviter que le script “ne voie” pas le package ou ne soit pas chargé. 
+
+Organisation visible / gestion pratique	Même si ce n’est pas “imposé”, organiser le dossier Mods pour que ce soit lisible (par créateur, par type de contenu, etc.) facilite le dépannage. 
+
+Dossier à éviter pour certains fichiers	Les lots/maisons/Sims importés ne vont pas dans Mods mais dans …\The Sims 4\Tray (avec les fichiers .trayitem, .blueprint, etc). Si des .package sont inclus pour un lot, ceux-ci doivent aller dans le dossier Mods. 
+
+Steam Community
+⚠️ Points à surveiller
+
+Si tu utilises des dossiers très profonds (>5 niveaux) pour les .package, le jeu peut ne pas charger certains fichiers.
+Si un mod script est mal placé (par exemple dans 3-4 sous-dossiers) il risque de ne pas être exécuté.
+Toujours garder à jour/modifié/mod remplacé après un patch du jeu — certains mods peuvent devenir incompatibles (crash, bugs).
+Les mods peuvent ne plus fonctionner après une mise à jour officielle — prévois de tester.
+Sauvegarde ton dossier Mods avant de faire des modifications majeures (tri, suppression) : ça évite de tout casser.
