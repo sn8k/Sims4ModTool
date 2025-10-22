@@ -12,6 +12,7 @@ import hashlib
 import threading
 import copy
 import logging
+import tempfile
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, MutableMapping, Optional, Sequence, Set, Tuple
@@ -25,12 +26,25 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.37"
-APP_VERSION_DATE = "22/10/2025 14:12 UTC"
+APP_VERSION = "v3.38"
+APP_VERSION_DATE = "22/10/2025 14:48 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
 SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
+
+MOD_ROW_KEYS = [
+    "status",
+    "package",
+    "package_date",
+    "script",
+    "script_date",
+    "version",
+    "confidence",
+    "ignored",
+]
+
+MOD_SCAN_CACHE_SCHEMA = 1
 
 IGNORED_ARCHIVE_PREFIXES = {"__MACOSX"}
 IGNORED_ARCHIVE_PREFIX_MATCHES = (".git",)
@@ -351,53 +365,148 @@ def save_installed_mods(installed_mods, path=INSTALLED_MODS_PATH):
         json.dump(installed_mods, handle, indent=4, ensure_ascii=False)
 
 
+def _normalize_cached_row(row):
+    if not isinstance(row, dict):
+        return None
+    normalized = {}
+    for key in MOD_ROW_KEYS:
+        if key == "ignored":
+            normalized[key] = bool(row.get(key, False))
+        else:
+            value = row.get(key)
+            if value is None:
+                normalized[key] = ""
+            else:
+                normalized[key] = str(value)
+    tooltip = row.get("confidence_tooltip", "")
+    normalized["confidence_tooltip"] = "" if tooltip is None else str(tooltip)
+    candidates = row.get("ignore_candidates", [])
+    if isinstance(candidates, (list, tuple)):
+        normalized["ignore_candidates"] = [
+            str(candidate) for candidate in candidates if candidate
+        ]
+    else:
+        normalized["ignore_candidates"] = []
+    paths = row.get("paths", [])
+    if isinstance(paths, (list, tuple)):
+        normalized["paths"] = [str(path) for path in paths if path]
+    else:
+        normalized["paths"] = []
+    return normalized
+
+
 def load_mod_scan_cache(path=MOD_SCAN_CACHE_PATH):
     if not os.path.exists(path):
         return None
     try:
         with open(path, "r", encoding="utf-8") as handle:
             data = json.load(handle)
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError) as exc:
+        LOGGER.warning("Impossible de charger le cache du scan (%s)", exc)
         return None
     if not isinstance(data, dict):
         return None
-    entries = data.get("entries")
-    if not isinstance(entries, list):
-        return None
+
+    entries = data.get("entries", [])
     normalized_entries = []
-    for entry in entries:
-        if not isinstance(entry, dict):
-            continue
-        path_value = str(entry.get("path") or "").strip()
-        if not path_value:
-            continue
-        normalized_entries.append({
-            "path": path_value.replace("\\", "/"),
-            "mtime": int(entry.get("mtime", 0)),
-            "size": int(entry.get("size", 0)),
-            "type": str(entry.get("type") or ""),
-        })
+    if isinstance(entries, list):
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            path_value = str(entry.get("path") or "").strip()
+            if not path_value:
+                continue
+            normalized_entries.append(
+                {
+                    "path": path_value.replace("\\", "/"),
+                    "mtime": int(entry.get("mtime", 0)),
+                    "size": int(entry.get("size", 0)),
+                    "type": str(entry.get("type") or ""),
+                }
+            )
     normalized_entries.sort(key=lambda item: item["path"].casefold())
+
+    rows = data.get("rows", [])
+    normalized_rows = []
+    if isinstance(rows, list):
+        for row in rows:
+            normalized_row = _normalize_cached_row(row)
+            if normalized_row is not None:
+                normalized_rows.append(normalized_row)
+
     normalized_root = str(data.get("root") or "").replace("\\", "/").strip()
+    generated_at = str(data.get("generated_at") or "").strip()
+    schema_version = int(data.get("schema", MOD_SCAN_CACHE_SCHEMA))
+
     return {
         "root": normalized_root,
         "entries": normalized_entries,
+        "rows": normalized_rows,
+        "generated_at": generated_at,
+        "schema": schema_version,
     }
 
 
 def save_mod_scan_cache(snapshot, path=MOD_SCAN_CACHE_PATH):
     if not isinstance(snapshot, dict):
-        return
-    directory = os.path.dirname(path)
+        return False
+
+    absolute_path = os.path.abspath(path)
+    directory = os.path.dirname(absolute_path)
     if directory:
         os.makedirs(directory, exist_ok=True)
+    else:
+        directory = os.getcwd()
+
+    entries_payload = []
+    for entry in snapshot.get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        path_value = str(entry.get("path") or "").strip()
+        if not path_value:
+            continue
+        entries_payload.append(
+            {
+                "path": path_value.replace("\\", "/"),
+                "mtime": int(entry.get("mtime", 0)),
+                "size": int(entry.get("size", 0)),
+                "type": str(entry.get("type") or ""),
+            }
+        )
+
+    rows_payload = []
+    for row in snapshot.get("rows", []):
+        normalized_row = _normalize_cached_row(row)
+        if normalized_row is not None:
+            rows_payload.append(normalized_row)
+
     serializable = {
         "root": str(snapshot.get("root") or ""),
         "generated_at": snapshot.get("generated_at", ""),
-        "entries": list(snapshot.get("entries", [])),
+        "entries": entries_payload,
+        "rows": rows_payload,
+        "schema": MOD_SCAN_CACHE_SCHEMA,
     }
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(serializable, handle, indent=2, ensure_ascii=False)
+
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w", encoding="utf-8", delete=False, dir=directory
+        ) as handle:
+            json.dump(serializable, handle, indent=2, ensure_ascii=False)
+            handle.flush()
+            os.fsync(handle.fileno())
+            temp_path = handle.name
+        os.replace(temp_path, absolute_path)
+        return True
+    except OSError as exc:
+        LOGGER.error("Impossible d'écrire le cache du scan : %s", exc)
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        return False
 
 
 def mod_scan_snapshots_equal(first, second):
@@ -729,9 +838,27 @@ def format_installation_display(iso_value):
         return iso_value
     return parsed.strftime("%d/%m/%Y %H:%M UTC")
 
+
+def safe_datetime_fromtimestamp(timestamp):
+    try:
+        return datetime.fromtimestamp(timestamp)
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def safe_relpath(path, start):
+    try:
+        return os.path.relpath(path, start)
+    except ValueError:
+        return os.path.basename(path)
+
+
 def get_file_date(file_path):
-    timestamp = os.path.getmtime(file_path)
-    return datetime.fromtimestamp(timestamp)
+    try:
+        timestamp = os.path.getmtime(file_path)
+    except OSError:
+        return None
+    return safe_datetime_fromtimestamp(timestamp)
 
 def load_settings(path=SETTINGS_PATH):
     try:
@@ -844,7 +971,7 @@ def similarity_confidence_label(ratio):
         return "Moyenne"
     return "Faible"
 
-def build_mod_rows(
+def iter_mod_rows(
     package_files,
     ts4script_files,
     settings,
@@ -870,7 +997,6 @@ def build_mod_rows(
     if start_limit and end_limit and start_limit > end_limit:
         start_limit, end_limit = end_limit, start_limit
 
-    data_rows = []
     ignored_mods = set(settings.get("ignored_mods", []))
     show_ignored = settings.get("show_ignored", False)
     show_packages = settings.get("show_package_mods", True)
@@ -1115,7 +1241,7 @@ def build_mod_rows(
         confidence_value = match_info["confidence"] if match_info else "—"
         confidence_tooltip = match_info["tooltip"] if match_info else "Aucun appariement détecté."
 
-        data_rows.append({
+        yield {
             "status": status,
             "package": pkg,
             "package_date": format_datetime(pkg_date),
@@ -1127,7 +1253,7 @@ def build_mod_rows(
             "ignored": ignored,
             "ignore_candidates": candidates or [pkg],
             "paths": [path for path in (pkg_path, script_path) if path],
-        })
+        }
 
     for script_name in sorted(unpaired_scripts, key=str.casefold):
         script_path = ts4script_files.get(script_name)
@@ -1150,7 +1276,7 @@ def build_mod_rows(
         status = "MP"
         version = estimate_version_from_dates(None, script_date, version_releases)
 
-        data_rows.append({
+        yield {
             "status": status,
             "package": "",
             "package_date": "",
@@ -1162,8 +1288,29 @@ def build_mod_rows(
             "ignored": ignored,
             "ignore_candidates": candidates,
             "paths": [script_path],
-        })
-    return data_rows
+        }
+
+
+def build_mod_rows(
+    package_files,
+    ts4script_files,
+    settings,
+    version_releases,
+    package_dates,
+    script_dates,
+    roots=None,
+):
+    return list(
+        iter_mod_rows(
+            package_files,
+            ts4script_files,
+            settings,
+            version_releases,
+            package_dates,
+            script_dates,
+            roots=roots,
+        )
+    )
 
 
 class ScanWorker(QtCore.QObject):
@@ -1183,7 +1330,18 @@ class ScanWorker(QtCore.QObject):
         super().__init__()
         self.roots = [os.path.abspath(path) for path in roots if path]
         self.settings = copy.deepcopy(settings) if settings is not None else {}
-        self.cache = cache or {}
+        snapshot_cache = cache if isinstance(cache, dict) else {}
+        self.previous_snapshot = copy.deepcopy(snapshot_cache) if snapshot_cache else {}
+        self.cached_rows = []
+        if isinstance(self.previous_snapshot.get("rows"), list):
+            self.cached_rows = copy.deepcopy(self.previous_snapshot.get("rows", []))
+        self.previous_entries_map = {}
+        for entry in self.previous_snapshot.get("entries", []):
+            if not isinstance(entry, dict):
+                continue
+            path_value = entry.get("path")
+            if path_value:
+                self.previous_entries_map[path_value] = entry
         self.stop_flag = stop_flag
         self.chunk_size = max(1, int(chunk_size or 200))
         self.snapshot = {}
@@ -1234,12 +1392,17 @@ class ScanWorker(QtCore.QObject):
                 full_path = os.path.join(directory, entry.name)
                 try:
                     stat_result = entry.stat(follow_symlinks=False)
-                except OSError:
+                except OSError as exc:
+                    self.logger.debug(
+                        "Impossible de récupérer les métadonnées pour %s : %s",
+                        full_path,
+                        exc,
+                    )
                     continue
                 extension = os.path.splitext(entry.name)[1].lower()
-                relative_path = os.path.relpath(full_path, root).replace("\\", "/")
-                if extension not in {".package", ".ts4script", ".zip"}:
+                if extension not in SUPPORTED_INSTALL_EXTENSIONS:
                     continue
+                relative_path = safe_relpath(full_path, root).replace("\\", "/")
                 entry_type = (
                     "package"
                     if extension == ".package"
@@ -1262,20 +1425,67 @@ class ScanWorker(QtCore.QObject):
                 file_stats[full_path] = stat_result
                 processed_files += 1
                 if total_files:
-                    percent = int((processed_files / total_files) * 100)
+                    percent = int((processed_files / max(total_files, 1)) * 100)
                     self.progress.emit(min(percent, 100))
 
         snapshot_entries.sort(key=lambda item: item["path"].casefold())
         root_value = self.roots[0] if self.roots else ""
-        self.snapshot = {
+        unchanged_entries = 0
+        if self.previous_entries_map:
+            for entry in snapshot_entries:
+                cached_entry = self.previous_entries_map.get(entry["path"])
+                if not cached_entry:
+                    continue
+                try:
+                    cached_mtime = int(cached_entry.get("mtime", 0))
+                    cached_size = int(cached_entry.get("size", 0))
+                except (TypeError, ValueError):
+                    continue
+                if cached_mtime == entry["mtime"] and cached_size == entry["size"]:
+                    unchanged_entries += 1
+        if unchanged_entries:
+            self.logger.debug(
+                "%d fichier(s) inchangé(s) détecté(s) via le cache", unchanged_entries
+            )
+        base_snapshot = {
             "root": root_value.replace("\\", "/"),
             "generated_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
             "entries": snapshot_entries,
         }
 
-        previous_snapshot = self.cache if isinstance(self.cache, dict) else None
-        self.snapshot_changed = bool(previous_snapshot) and not mod_scan_snapshots_equal(previous_snapshot, self.snapshot)
+        previous_snapshot = self.previous_snapshot
+        snapshots_equal = bool(previous_snapshot) and mod_scan_snapshots_equal(
+            previous_snapshot, base_snapshot
+        )
+        self.snapshot_changed = not snapshots_equal
         self.logger.debug("Instantané modifié : %s", self.snapshot_changed)
+
+        if snapshots_equal:
+            cached_rows = copy.deepcopy(self.cached_rows)
+            self.rows_total = len(cached_rows)
+            self.logger.info(
+                "Instantané identique, réutilisation de %d ligne(s) depuis le cache",
+                self.rows_total,
+            )
+            self.snapshot = dict(base_snapshot)
+            self.snapshot["rows"] = cached_rows
+            for chunk in self._chunk_rows(cached_rows):
+                if self.stop_flag.is_set():
+                    self.logger.info("Scan interrompu avant l'émission du cache")
+                    self.finished.emit(False, "Cancelled")
+                    return
+                self.chunkReady.emit(chunk)
+                self.logger.debug(
+                    "Paquet de %d ligne(s) envoyé depuis le cache", len(chunk)
+                )
+            if not save_mod_scan_cache(self.snapshot):
+                self.logger.warning(
+                    "Échec de l'écriture du cache après réutilisation du cache existant"
+                )
+            self.progress.emit(100)
+            self.logger.info("Scan terminé avec succès (cache)")
+            self.finished.emit(True, "OK")
+            return
 
         package_dates: Dict[str, Optional[datetime]] = {}
         script_dates: Dict[str, Optional[datetime]] = {}
@@ -1283,19 +1493,33 @@ class ScanWorker(QtCore.QObject):
         def _resolve_timestamp(path: str) -> Optional[datetime]:
             stat_result = file_stats.get(path)
             if stat_result is not None:
-                return datetime.fromtimestamp(stat_result.st_mtime)
-            try:
-                return get_file_date(path)
-            except Exception:
-                return None
+                resolved = safe_datetime_fromtimestamp(stat_result.st_mtime)
+                if resolved is not None:
+                    return resolved
+            return get_file_date(path)
 
         for pkg_path in package_files.values():
+            if self.stop_flag.is_set():
+                self.logger.info(
+                    "Scan interrompu avant résolution des dates des packages"
+                )
+                self.finished.emit(False, "Cancelled")
+                return
             package_dates[pkg_path] = _resolve_timestamp(pkg_path)
 
         for script_path in ts4script_files.values():
+            if self.stop_flag.is_set():
+                self.logger.info(
+                    "Scan interrompu avant résolution des dates des scripts"
+                )
+                self.finished.emit(False, "Cancelled")
+                return
             script_dates[script_path] = _resolve_timestamp(script_path)
 
-        rows = build_mod_rows(
+        rows_for_cache: List[dict] = []
+        chunk_accumulator: List[dict] = []
+
+        for row in iter_mod_rows(
             package_files,
             ts4script_files,
             self.settings,
@@ -1303,19 +1527,42 @@ class ScanWorker(QtCore.QObject):
             package_dates,
             script_dates,
             roots=self.roots,
-        )
-        self.rows_total = len(rows)
-        self.logger.debug("%d ligne(s) générée(s) pour la table", self.rows_total)
-
-        for chunk in self._chunk_rows(rows):
+        ):
             if self.stop_flag.is_set():
-                self.logger.info("Scan interrompu avant l'émission du dernier paquet")
+                self.logger.info(
+                    "Scan interrompu avant l'émission du dernier paquet"
+                )
                 self.finished.emit(False, "Cancelled")
                 return
-            self.chunkReady.emit(chunk)
-            self.logger.debug("Paquet de %d ligne(s) envoyé", len(chunk))
+            rows_for_cache.append(row)
+            chunk_accumulator.append(row)
+            if len(chunk_accumulator) >= self.chunk_size:
+                chunk = list(chunk_accumulator)
+                chunk_accumulator.clear()
+                self.chunkReady.emit(chunk)
+                self.logger.debug("Paquet de %d ligne(s) envoyé", len(chunk))
 
-        save_mod_scan_cache(self.snapshot)
+        if chunk_accumulator:
+            if self.stop_flag.is_set():
+                self.logger.info(
+                    "Scan interrompu avant l'envoi du dernier paquet partiel"
+                )
+                self.finished.emit(False, "Cancelled")
+                return
+            self.chunkReady.emit(list(chunk_accumulator))
+            self.logger.debug(
+                "Paquet de %d ligne(s) envoyé", len(chunk_accumulator)
+            )
+
+        self.rows_total = len(rows_for_cache)
+        self.logger.debug("%d ligne(s) générée(s) pour la table", self.rows_total)
+
+        self.snapshot = dict(base_snapshot)
+        self.snapshot["rows"] = copy.deepcopy(rows_for_cache)
+        if not save_mod_scan_cache(self.snapshot):
+            self.logger.warning(
+                "Échec de l'écriture du cache après génération des résultats"
+            )
         self.progress.emit(100)
         self.logger.info("Scan terminé avec succès")
         self.finished.emit(True, "OK")
@@ -1328,7 +1575,7 @@ class ScanWorker(QtCore.QObject):
     def _is_supported(self, entry: os.DirEntry) -> bool:
         if not entry.is_file(follow_symlinks=False):
             return False
-        return os.path.splitext(entry.name)[1].lower() in {".package", ".ts4script", ".zip"}
+        return os.path.splitext(entry.name)[1].lower() in SUPPORTED_INSTALL_EXTENSIONS
 
     def _iter_directory(self, root: str):
         stack = [root]
@@ -1368,16 +1615,7 @@ class ScanWorker(QtCore.QObject):
 
 
 class ModsModel(QtCore.QAbstractTableModel):
-    COLUMN_KEYS = [
-        "status",
-        "package",
-        "package_date",
-        "script",
-        "script_date",
-        "version",
-        "confidence",
-        "ignored",
-    ]
+    COLUMN_KEYS = MOD_ROW_KEYS
     HEADERS = [
         "État",
         "Fichier .package",
@@ -2737,9 +2975,20 @@ class ModManagerApp(QtWidgets.QWidget):
         LOGGER.info("Initialisation de l'application (version %s) avec le niveau de log %s", APP_VERSION, self.settings.get("log_level"))
         self.custom_version_releases = load_custom_version_releases()
         self.version_releases = merge_version_releases(self.custom_version_releases)
+        self._cached_snapshot = load_mod_scan_cache() or {}
+        cached_rows = []
+        if isinstance(self._cached_snapshot.get("rows"), list):
+            cached_rows = copy.deepcopy(self._cached_snapshot.get("rows", []))
+            LOGGER.debug(
+                "Chargement de %d ligne(s) depuis le cache au démarrage",
+                len(cached_rows),
+            )
+        cached_root = str(self._cached_snapshot.get("root", ""))
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
-        self.last_scanned_directory = ""
-        self.all_data_rows = []
+        self.last_scanned_directory = (
+            cached_root if cached_root and os.path.isdir(cached_root) else ""
+        )
+        self.all_data_rows = list(cached_rows)
         self._cache_clear_triggered_this_refresh = False
         self.scan_thread = None
         self.scan_worker = None
@@ -2757,6 +3006,14 @@ class ModManagerApp(QtWidgets.QWidget):
         self._stored_sort_order = QtCore.Qt.AscendingOrder
 
         self.init_ui()
+
+        if self.all_data_rows and hasattr(self, "mods_model"):
+            self.mods_model.set_rows(self.all_data_rows)
+            if hasattr(self, "mods_proxy"):
+                self.mods_proxy.invalidateFilter()
+            if hasattr(self, "scan_count_label") and self.scan_count_label is not None:
+                self.scan_count_label.setText(f"{len(self.all_data_rows)} mods (cache)")
+                self.scan_count_label.setVisible(True)
 
         if not os.path.exists(MOD_SCAN_CACHE_PATH):
             mod_directory = self.settings.get("mod_directory", "")
@@ -3165,6 +3422,12 @@ class ModManagerApp(QtWidgets.QWidget):
             self.all_data_rows = []
             if hasattr(self, "mods_proxy"):
                 self.mods_proxy.invalidateFilter()
+            self._cached_snapshot = {}
+            try:
+                if os.path.exists(MOD_SCAN_CACHE_PATH):
+                    os.remove(MOD_SCAN_CACHE_PATH)
+            except OSError:
+                LOGGER.debug("Impossible de supprimer l'ancien cache du scan lors du changement de dossier")
 
     def _start_scan(self, roots, *, update_last_scanned=False, status_message="Scan en cours..."):
         valid_roots = [path for path in roots if path and os.path.isdir(path)]
@@ -3220,7 +3483,7 @@ class ModManagerApp(QtWidgets.QWidget):
         settings_snapshot["_version_releases"] = [
             (version, release.isoformat()) for version, release in self.version_releases.items()
         ]
-        cache_snapshot = load_mod_scan_cache() or {}
+        cache_snapshot = copy.deepcopy(self._cached_snapshot) if self._cached_snapshot else {}
 
         self._scan_stop_flag = threading.Event()
         self.scan_worker = ScanWorker(valid_roots, settings_snapshot, cache_snapshot, self._scan_stop_flag)
@@ -3705,6 +3968,8 @@ class ModManagerApp(QtWidgets.QWidget):
         worker = self.scan_worker
         self._scan_buffer_timer.stop()
         self._flush_scan_buffer()
+        if success and worker and getattr(worker, "snapshot", None):
+            self._cached_snapshot = copy.deepcopy(worker.snapshot)
         snapshot_changed = bool(worker and getattr(worker, "snapshot_changed", False))
         self._cleanup_scan_thread()
         self._finish_scan_progress()
