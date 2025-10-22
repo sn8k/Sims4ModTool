@@ -1,8 +1,8 @@
 # Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.20
-- **Dernière mise à jour :** 22/10/2025 08:37 UTC
+- **Version de l'application :** v3.21
+- **Dernière mise à jour :** 22/10/2025 09:02 UTC
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
@@ -14,7 +14,7 @@
 - Nettoyage guidé du cache Sims 4 via le bouton **Clear Sims4 Cache**.
 - Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement et possibilité d'exclure certains fichiers par nom.
 - Lancement direct de `TS4_X64.exe` avec arguments optionnels.
-- Installation de mods par glisser-déposer via la fenêtre **Mod Installer**, avec journalisation des installations, mise à jour dédiée et ajout d'add-ons.
+- Installation de mods par glisser-déposer via la fenêtre **Mod Installer**, avec journalisation des installations, mise à jour dédiée, ajout et suppression d'add-ons.
 
 ## Prérequis
 - Python 3.9 ou supérieur.

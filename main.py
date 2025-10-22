@@ -17,11 +17,78 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.20"
-APP_VERSION_DATE = "22/10/2025 08:37 UTC"
+APP_VERSION = "v3.21"
+APP_VERSION_DATE = "22/10/2025 09:02 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 
 SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
+
+
+def normalize_addon_metadata(addons):
+    normalized = []
+    if not isinstance(addons, list):
+        return normalized
+
+    def _append_or_merge(target_list, candidate):
+        label = candidate.get("label", "")
+        if not label:
+            return
+        key = label.casefold()
+        for existing in target_list:
+            if existing.get("label", "").casefold() == key:
+                existing_paths = existing.setdefault("paths", [])
+                for path in candidate.get("paths", []):
+                    if path and path not in existing_paths:
+                        existing_paths.append(path)
+                if candidate.get("added_at") and not existing.get("added_at"):
+                    existing["added_at"] = candidate.get("added_at")
+                return
+        target_list.append(candidate)
+
+    for addon in addons:
+        label = ""
+        paths = []
+        added_at = ""
+        if isinstance(addon, dict):
+            label = str(
+                addon.get("label")
+                or addon.get("name")
+                or addon.get("source")
+                or addon.get("title")
+                or ""
+            ).strip()
+            raw_paths = addon.get("paths", [])
+            if isinstance(raw_paths, (list, tuple)):
+                for path in raw_paths:
+                    path_str = str(path).replace("\\", "/").strip()
+                    if path_str:
+                        if path_str.startswith("..") or "/../" in path_str:
+                            continue
+                        if path_str.endswith("/"):
+                            base_path = os.path.normpath(path_str[:-1])
+                            normalized_path = f"{base_path.replace('\\', '/')}/"
+                        else:
+                            base_path = os.path.normpath(path_str)
+                            normalized_path = base_path.replace('\\', '/')
+                        if normalized_path not in paths:
+                            paths.append(normalized_path)
+            added_at = str(addon.get("added_at") or "").strip()
+        else:
+            label = str(addon).strip()
+
+        if not label:
+            continue
+
+        _append_or_merge(
+            normalized,
+            {
+                "label": label,
+                "paths": paths,
+                "added_at": added_at,
+            },
+        )
+
+    return normalized
 
 
 DEFAULT_VERSION_RELEASES = [
@@ -179,11 +246,7 @@ def load_installed_mods(path=INSTALLED_MODS_PATH):
             "installed_at": str(entry.get("installed_at") or "").strip(),
             "target_folder": target_folder,
             "source": str(entry.get("source") or "").strip(),
-            "addons": [
-                str(addon).strip()
-                for addon in entry.get("addons", [])
-                if str(addon).strip()
-            ],
+            "addons": normalize_addon_metadata(entry.get("addons", [])),
         })
 
     normalized_entries.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
@@ -872,7 +935,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
                 return False, f"Installation de '{display_name}' annulée."
             replace_existing = True
 
-        success, message = self._install_file_to_target(
+        success, message, _ = self._install_file_to_target(
             file_path,
             target_folder,
             clean_before=replace_existing,
@@ -896,20 +959,21 @@ class ModInstallerDialog(QtWidgets.QDialog):
 
     def _install_file_to_target(self, file_path, target_folder, *, clean_before=False, merge=False):
         extension = os.path.splitext(file_path)[1].lower()
+        installed_entries = []
 
         if clean_before and os.path.exists(target_folder):
             try:
                 shutil.rmtree(target_folder)
             except OSError as exc:
-                return False, f"Impossible de nettoyer le dossier existant : {exc}"
+                return False, f"Impossible de nettoyer le dossier existant : {exc}", []
 
         if extension == ".zip" and not zipfile.is_zipfile(file_path):
-            return False, f"Le fichier n'est pas une archive zip valide : {os.path.basename(file_path)}"
+            return False, f"Le fichier n'est pas une archive zip valide : {os.path.basename(file_path)}", []
 
         try:
             os.makedirs(target_folder, exist_ok=True)
         except OSError as exc:
-            return False, f"Impossible de créer le dossier cible : {exc}"
+            return False, f"Impossible de créer le dossier cible : {exc}", []
 
         try:
             if extension in {".package", ".ts4script"}:
@@ -926,16 +990,34 @@ class ModInstallerDialog(QtWidgets.QDialog):
                         QtWidgets.QMessageBox.Yes,
                     )
                     if response != QtWidgets.QMessageBox.Yes:
-                        return False, f"Copie de '{os.path.basename(file_path)}' annulée."
+                        return False, f"Copie de '{os.path.basename(file_path)}' annulée.", []
                 shutil.copy2(file_path, destination_path)
+                installed_entries.append(os.path.basename(destination_path))
             else:
                 with zipfile.ZipFile(file_path, "r") as archive:
+                    members = []
+                    for member in archive.namelist():
+                        normalized_member = str(member).replace("\\", "/").strip()
+                        if not normalized_member:
+                            continue
+                        normalized_member = normalized_member.lstrip("/")
+                        if not normalized_member or normalized_member.startswith("..") or "/../" in normalized_member:
+                            continue
+                        if normalized_member.endswith("/"):
+                            base_path = os.path.normpath(normalized_member[:-1])
+                            final_path = f"{base_path.replace('\\', '/')}/"
+                        else:
+                            base_path = os.path.normpath(normalized_member)
+                            final_path = base_path.replace('\\', '/')
+                        if final_path not in members:
+                            members.append(final_path)
                     archive.extractall(target_folder)
+                    installed_entries.extend(members)
         except (OSError, zipfile.BadZipFile, RuntimeError) as exc:
-            return False, f"Erreur lors de la copie : {exc}"
+            return False, f"Erreur lors de la copie : {exc}", []
 
         verb = "ajouté" if merge and not clean_before else "installé"
-        return True, f"{os.path.basename(file_path)} {verb} dans '{os.path.basename(target_folder)}'."
+        return True, f"{os.path.basename(file_path)} {verb} dans '{os.path.basename(target_folder)}'.", installed_entries
 
     @staticmethod
     def _describe_install_type(file_paths):
@@ -953,20 +1035,22 @@ class ModInstallerDialog(QtWidgets.QDialog):
         return ", ".join(sorted(set(extensions)))
 
     def _record_installation(self, entry):
-        target = entry.get("target_folder")
+        normalized_entry = dict(entry)
+        normalized_entry["addons"] = normalize_addon_metadata(entry.get("addons", []))
+
+        target = normalized_entry.get("target_folder")
         if not target:
             return
         replaced = False
         for existing in self.installed_mods:
             if existing.get("target_folder") == target:
-                existing.update(entry)
-                if "addons" not in entry:
-                    existing["addons"] = existing.get("addons", [])
+                existing.update(normalized_entry)
+                existing["addons"] = normalize_addon_metadata(existing.get("addons", []))
                 replaced = True
                 break
         if not replaced:
-            entry.setdefault("addons", [])
-            self.installed_mods.append(entry)
+            normalized_entry.setdefault("addons", [])
+            self.installed_mods.append(normalized_entry)
         self.installed_mods.sort(key=lambda item: item.get("installed_at", ""), reverse=True)
         save_installed_mods(self.installed_mods)
         self.refresh_table()
@@ -984,6 +1068,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
         search_action = menu.addAction("Recherche Google")
         menu.addSeparator()
         addons_action = menu.addAction("Ajouter add-ons")
+        remove_addons_action = menu.addAction("Supprimer add-ons")
+        remove_addons_action.setEnabled(bool(entry.get("addons")))
         delete_action = menu.addAction("Supprimer le mod")
         update_action = menu.addAction("Mettre à jour le mod")
 
@@ -994,6 +1080,8 @@ class ModInstallerDialog(QtWidgets.QDialog):
             self._open_google_search(entry)
         elif chosen_action == addons_action:
             self._prompt_addons(entry)
+        elif chosen_action == remove_addons_action:
+            self._prompt_remove_addons(entry)
         elif chosen_action == delete_action:
             self._delete_mod(entry)
         elif chosen_action == update_action:
@@ -1044,6 +1132,200 @@ class ModInstallerDialog(QtWidgets.QDialog):
         dialog = FileDropDialog("Ajouter des add-ons", instruction, handle_drop, self)
         dialog.exec_()
 
+    def _prompt_remove_addons(self, entry):
+        entry_addons = normalize_addon_metadata(entry.get("addons", []))
+        if not entry_addons:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Aucun add-on",
+                "Aucun add-on n'est enregistré pour ce mod.",
+            )
+            return
+
+        entry["addons"] = entry_addons
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Supprimer des add-ons")
+        dialog.setModal(True)
+
+        layout = QtWidgets.QVBoxLayout(dialog)
+        info_label = QtWidgets.QLabel("Sélectionnez les add-ons à supprimer :")
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+
+        list_widget = QtWidgets.QListWidget(dialog)
+        list_widget.setSelectionMode(QtWidgets.QAbstractItemView.MultiSelection)
+        for addon in entry_addons:
+            label = addon.get("label") or "Add-on"
+            added_at_display = format_installation_display(addon.get("added_at", ""))
+            if added_at_display:
+                item_text = f"{label} – {added_at_display}"
+            else:
+                item_text = label
+            list_item = QtWidgets.QListWidgetItem(item_text)
+            list_widget.addItem(list_item)
+        layout.addWidget(list_widget)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel,
+            QtCore.Qt.Horizontal,
+            dialog,
+        )
+        remove_button = buttons.button(QtWidgets.QDialogButtonBox.Ok)
+        remove_button.setText("Supprimer")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec_() != QtWidgets.QDialog.Accepted:
+            return
+
+        selected_rows = sorted({index.row() for index in list_widget.selectedIndexes()}, reverse=True)
+        if not selected_rows:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Aucune sélection",
+                "Sélectionnez au moins un add-on à supprimer.",
+            )
+            return
+
+        success_messages = []
+        error_messages = []
+        removed_count = 0
+
+        for row in selected_rows:
+            if row < 0 or row >= len(entry_addons):
+                continue
+            addon = entry_addons[row]
+            label = addon.get("label") or f"Add-on {row + 1}"
+            removed, missing, errors = self._remove_addon_files(entry, addon)
+            if errors:
+                for message in errors:
+                    error_messages.append(f"{label} : {message}")
+                continue
+
+            del entry_addons[row]
+            removed_count += 1
+            details = []
+            if removed:
+                details.append(f"{len(removed)} élément(s) supprimé(s)")
+            if missing:
+                details.append(f"{len(missing)} élément(s) introuvable(s)")
+            if details:
+                success_messages.append(f"{label} – {', '.join(details)}")
+            else:
+                success_messages.append(f"{label} supprimé.")
+
+        if removed_count:
+            updated_entry = dict(entry)
+            updated_entry["addons"] = normalize_addon_metadata(entry_addons)
+            updated_entry["installed_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
+            self._record_installation(updated_entry)
+            self.installations_performed = True
+
+        if success_messages:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Suppression terminée",
+                "\n".join(success_messages),
+            )
+        if error_messages:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Suppression partielle",
+                "\n".join(error_messages),
+            )
+
+    def _remove_addon_files(self, entry, addon):
+        target_folder = entry.get("target_folder")
+        removed = []
+        missing = []
+        errors = []
+
+        if not target_folder or not os.path.isdir(target_folder):
+            return removed, missing, ["Dossier du mod introuvable."]
+
+        raw_paths = []
+        if isinstance(addon, dict):
+            raw_paths = list(addon.get("paths", []))
+            if not raw_paths and addon.get("label"):
+                raw_paths = [addon.get("label")]
+        else:
+            raw_paths = [str(addon)]
+
+        entries = []
+        seen = set()
+        for raw_path in raw_paths:
+            path_str = str(raw_path).replace("\\", "/").strip()
+            if not path_str:
+                continue
+            is_directory = path_str.endswith("/")
+            trimmed = path_str[:-1] if is_directory else path_str
+            normalized = os.path.normpath(trimmed).replace("\\", "/")
+            if not normalized or normalized in {".", ""}:
+                continue
+            if normalized.startswith("..") or "/../" in normalized:
+                errors.append(f"Chemin invalide ignoré : {path_str}")
+                continue
+            key = (normalized, is_directory)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append((normalized, is_directory))
+
+        if not entries:
+            return removed, missing, errors
+
+        target_root = os.path.realpath(target_folder)
+
+        def _sorted_by_depth(items):
+            return sorted(items, key=lambda value: (value.count("/"), value), reverse=True)
+
+        file_entries = [value for value, is_dir in entries if not is_dir]
+        dir_entries = [value for value, is_dir in entries if is_dir]
+
+        for rel_path in _sorted_by_depth(file_entries):
+            absolute_path = os.path.realpath(os.path.join(target_root, rel_path))
+            if os.path.commonpath([target_root, absolute_path]) != target_root:
+                errors.append(f"Chemin hors du mod : {rel_path}")
+                continue
+            if os.path.isfile(absolute_path):
+                try:
+                    os.remove(absolute_path)
+                    removed.append(rel_path)
+                except OSError as exc:
+                    errors.append(f"{rel_path} : {exc}")
+            elif os.path.isdir(absolute_path):
+                try:
+                    shutil.rmtree(absolute_path)
+                    removed.append(f"{rel_path}/")
+                except OSError as exc:
+                    errors.append(f"{rel_path} : {exc}")
+            else:
+                missing.append(rel_path)
+
+        for rel_path in _sorted_by_depth(dir_entries):
+            absolute_path = os.path.realpath(os.path.join(target_root, rel_path))
+            if os.path.commonpath([target_root, absolute_path]) != target_root:
+                errors.append(f"Chemin hors du mod : {rel_path}/")
+                continue
+            if os.path.isdir(absolute_path):
+                try:
+                    shutil.rmtree(absolute_path)
+                    removed.append(f"{rel_path}/")
+                except OSError as exc:
+                    errors.append(f"{rel_path}/ : {exc}")
+            elif os.path.isfile(absolute_path):
+                try:
+                    os.remove(absolute_path)
+                    removed.append(rel_path)
+                except OSError as exc:
+                    errors.append(f"{rel_path}/ : {exc}")
+            else:
+                missing.append(f"{rel_path}/")
+
+        return removed, missing, errors
+
     def _perform_update(self, entry, file_paths):
         target_folder = entry.get("target_folder")
         if not target_folder:
@@ -1060,7 +1342,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
             if not self._is_supported_extension(path):
                 error_messages.append(f"Extension non supportée : {os.path.basename(path)}")
                 continue
-            success, message = self._install_file_to_target(
+            success, message, _ = self._install_file_to_target(
                 path,
                 target_folder,
                 clean_before=(index == 0),
@@ -1091,6 +1373,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
         success_messages = []
         error_messages = []
         added_sources = []
+        new_addons = []
 
         for path in file_paths:
             if not os.path.isfile(path):
@@ -1099,7 +1382,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
             if not self._is_supported_extension(path):
                 error_messages.append(f"Extension non supportée : {os.path.basename(path)}")
                 continue
-            success, message = self._install_file_to_target(
+            success, message, installed_paths = self._install_file_to_target(
                 path,
                 target_folder,
                 clean_before=False,
@@ -1107,23 +1390,23 @@ class ModInstallerDialog(QtWidgets.QDialog):
             )
             if success:
                 success_messages.append(message)
-                added_sources.append(os.path.basename(path))
+                label = os.path.basename(path)
+                added_sources.append(label)
+                new_addons.append(
+                    {
+                        "label": label,
+                        "paths": installed_paths,
+                        "added_at": datetime.utcnow().replace(microsecond=0).isoformat(),
+                    }
+                )
             elif message:
                 error_messages.append(message)
 
         if added_sources:
             updated_entry = dict(entry)
-            existing_addons = list(updated_entry.get("addons", []))
-            existing_addons.extend(added_sources)
-            seen = set()
-            filtered_addons = []
-            for addon in existing_addons:
-                key = addon.lower()
-                if key in seen:
-                    continue
-                seen.add(key)
-                filtered_addons.append(addon)
-            updated_entry["addons"] = filtered_addons
+            existing_addons = normalize_addon_metadata(updated_entry.get("addons", []))
+            existing_addons.extend(new_addons)
+            updated_entry["addons"] = normalize_addon_metadata(existing_addons)
             updated_entry["installed_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
             self._record_installation(updated_entry)
             self.installations_performed = True
