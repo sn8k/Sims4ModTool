@@ -17,8 +17,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.22"
-APP_VERSION_DATE = "22/10/2025 09:07 UTC"
+APP_VERSION = "v3.23"
+APP_VERSION_DATE = "22/10/2025 09:13 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 
 SUPPORTED_INSTALL_EXTENSIONS = {".package", ".ts4script", ".zip"}
@@ -1005,7 +1005,7 @@ class ModInstallerDialog(QtWidgets.QDialog):
                             continue
                         if normalized_member.endswith("/"):
                             base_path = os.path.normpath(normalized_member[:-1])
-                            final_path = f"{base_path.replace('\\', '/')}/"
+                            final_path = base_path.replace("\\", "/") + "/"
                         else:
                             base_path = os.path.normpath(normalized_member)
                             final_path = base_path.replace('\\', '/')
