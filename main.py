@@ -11,6 +11,7 @@ import stat
 import hashlib
 import threading
 import copy
+import logging
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, MutableMapping, Optional, Sequence, Set, Tuple
@@ -25,8 +26,8 @@ from openpyxl import Workbook
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.35"
-APP_VERSION_DATE = "22/10/2025 13:20 UTC"
+APP_VERSION = "v3.36"
+APP_VERSION_DATE = "22/10/2025 13:43 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 
@@ -58,6 +59,35 @@ DISALLOWED_ARCHIVE_EXTENSIONS = {
     ".php",
 }
 MAX_RELATIVE_DEPTH = 2
+
+LOG_LEVEL_CHOICES = {
+    "CRITICAL": logging.CRITICAL,
+    "ERROR": logging.ERROR,
+    "WARNING": logging.WARNING,
+    "INFO": logging.INFO,
+    "DEBUG": logging.DEBUG,
+}
+
+DEFAULT_LOG_LEVEL = "DEBUG"
+
+LOGGER = logging.getLogger("sims4_mod_manager")
+
+
+def configure_logging(level_name: str = DEFAULT_LOG_LEVEL) -> int:
+    target_level_name = str(level_name or DEFAULT_LOG_LEVEL).upper()
+    level = LOG_LEVEL_CHOICES.get(target_level_name, logging.DEBUG)
+
+    root_logger = logging.getLogger()
+    if not root_logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        root_logger.addHandler(handler)
+    root_logger.setLevel(level)
+    LOGGER.setLevel(level)
+    LOGGER.debug("Configuration du logging appliquée au niveau %s", target_level_name)
+    return level
 
 MOD_NAME_SANITIZE_RE = re.compile(r"[^a-z0-9]+")
 MIN_SIMILARITY_RATIO = 0.6
@@ -727,6 +757,7 @@ def load_settings(path=SETTINGS_PATH):
         "ignored_mods": [],
         "show_ignored": False,
         "show_search_results": True,
+        "log_level": DEFAULT_LOG_LEVEL,
     }
     for key, value in defaults.items():
         settings.setdefault(key, value)
@@ -782,6 +813,10 @@ def load_settings(path=SETTINGS_PATH):
         ignored_from_file = settings.get("ignored_mods", [])
         save_ignore_list(ignored_from_file)
     settings["ignored_mods"] = ignored_from_file
+    level_name = str(settings.get("log_level", DEFAULT_LOG_LEVEL)).upper()
+    if level_name not in LOG_LEVEL_CHOICES:
+        level_name = DEFAULT_LOG_LEVEL
+    settings["log_level"] = level_name
     return settings
 
 def save_settings(settings, path=SETTINGS_PATH):
@@ -1155,6 +1190,7 @@ class ScanWorker(QtCore.QObject):
         self.snapshot = {}
         self.snapshot_changed = False
         self.rows_total = 0
+        self.logger = logging.getLogger("sims4_mod_manager.scan")
         raw_version_items = self.settings.pop("_version_releases", [])
         self.version_releases = OrderedDict()
         for version, date_str in raw_version_items:
@@ -1163,9 +1199,11 @@ class ScanWorker(QtCore.QObject):
                 self.version_releases[version] = parsed
 
     def run(self):
+        self.logger.debug("Scan démarré sur %d racine(s)", len(self.roots))
         try:
             self._run_impl()
         except Exception as exc:  # pragma: no cover - defensive
+            self.logger.exception("Erreur inattendue pendant le scan : %s", exc)
             self.error.emit(str(exc))
             self.finished.emit(False, "Erreur")
 
@@ -1174,6 +1212,7 @@ class ScanWorker(QtCore.QObject):
             self.finished.emit(False, "Aucun dossier valide")
             return
         total_files = self._estimate_total_files()
+        self.logger.debug("Estimation de %d fichier(s) à traiter", total_files)
         self.progress.emit(0)
 
         cache_entries = {}
@@ -1194,11 +1233,14 @@ class ScanWorker(QtCore.QObject):
         processed_files = 0
 
         for root in self.roots:
+            self.logger.debug("Exploration du dossier %s", root)
             if self.stop_flag.is_set():
+                self.logger.info("Scan interrompu avant exploration complète")
                 self.finished.emit(False, "Cancelled")
                 return
             for directory, entry in self._iter_directory(root):
                 if self.stop_flag.is_set():
+                    self.logger.info("Scan interrompu pendant l'exploration")
                     self.finished.emit(False, "Cancelled")
                     return
                 full_path = os.path.join(directory, entry.name)
@@ -1251,6 +1293,7 @@ class ScanWorker(QtCore.QObject):
 
         previous_snapshot = self.cache if isinstance(self.cache, dict) else None
         self.snapshot_changed = bool(previous_snapshot) and not mod_scan_snapshots_equal(previous_snapshot, self.snapshot)
+        self.logger.debug("Instantané modifié : %s", self.snapshot_changed)
 
         package_dates: Dict[str, Optional[datetime]] = {}
         script_dates: Dict[str, Optional[datetime]] = {}
@@ -1299,15 +1342,19 @@ class ScanWorker(QtCore.QObject):
             roots=self.roots,
         )
         self.rows_total = len(rows)
+        self.logger.debug("%d ligne(s) générée(s) pour la table", self.rows_total)
 
         for chunk in self._chunk_rows(rows):
             if self.stop_flag.is_set():
+                self.logger.info("Scan interrompu avant l'émission du dernier paquet")
                 self.finished.emit(False, "Cancelled")
                 return
             self.chunkReady.emit(chunk)
+            self.logger.debug("Paquet de %d ligne(s) envoyé", len(chunk))
 
         save_mod_scan_cache(self.snapshot)
         self.progress.emit(100)
+        self.logger.info("Scan terminé avec succès")
         self.finished.emit(True, "OK")
 
     def _chunk_rows(self, rows: List[dict]):
@@ -1342,6 +1389,7 @@ class ScanWorker(QtCore.QObject):
         while stack:
             current = stack.pop()
             if self.stop_flag.is_set():
+                self.logger.debug("Arrêt demandé pendant l'estimation")
                 return total
             try:
                 with os.scandir(current) as iterator:
@@ -1352,6 +1400,7 @@ class ScanWorker(QtCore.QObject):
                             total += 1
             except OSError:
                 continue
+        self.logger.debug("Estimation terminée : %d fichier(s)", total)
         return total
 
 
@@ -1626,6 +1675,20 @@ class ConfigurationDialog(QtWidgets.QDialog):
         logs_ext_layout.addWidget(self.log_extensions_edit)
         layout.addLayout(logs_ext_layout)
 
+        self.log_level_combo = QtWidgets.QComboBox(self)
+        for level_name in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+            self.log_level_combo.addItem(level_name, level_name)
+        current_level = settings.get("log_level", DEFAULT_LOG_LEVEL)
+        current_index = self.log_level_combo.findData(current_level)
+        if current_index == -1:
+            current_index = 0
+        self.log_level_combo.setCurrentIndex(current_index)
+
+        log_level_layout = QtWidgets.QHBoxLayout()
+        log_level_layout.addWidget(QtWidgets.QLabel("Niveau de log :"))
+        log_level_layout.addWidget(self.log_level_combo)
+        layout.addLayout(log_level_layout)
+
         self.grab_logs_ignore_edit = QtWidgets.QPlainTextEdit(self)
         self.grab_logs_ignore_edit.setPlaceholderText("last_crash.txt\nExceptionLog.txt")
         ignore_lines = "\n".join(settings.get("grab_logs_ignore_files", []))
@@ -1729,6 +1792,12 @@ class ConfigurationDialog(QtWidgets.QDialog):
                 seen_ignore.add(key)
                 ignore_files.append(cleaned)
 
+        log_level = DEFAULT_LOG_LEVEL
+        if hasattr(self, "log_level_combo"):
+            selected = self.log_level_combo.currentData()
+            if isinstance(selected, str) and selected.upper() in LOG_LEVEL_CHOICES:
+                log_level = selected.upper()
+
         if self._parent is not None:
             self._parent.apply_configuration(
                 mod_directory,
@@ -1738,6 +1807,7 @@ class ConfigurationDialog(QtWidgets.QDialog):
                 sims_executable_arguments,
                 sorted(set(extra_extensions)),
                 ignore_files,
+                log_level,
             )
         self.accept()
 
@@ -2700,6 +2770,8 @@ class ModManagerApp(QtWidgets.QWidget):
         self.setGeometry(100, 100, 800, 600)
 
         self.settings = load_settings()
+        configure_logging(self.settings.get("log_level", DEFAULT_LOG_LEVEL))
+        LOGGER.info("Initialisation de l'application (version %s) avec le niveau de log %s", APP_VERSION, self.settings.get("log_level"))
         self.custom_version_releases = load_custom_version_releases()
         self.version_releases = merge_version_releases(self.custom_version_releases)
         self.ignored_mods = set(self.settings.get("ignored_mods", []))
@@ -2718,6 +2790,8 @@ class ModManagerApp(QtWidgets.QWidget):
         self._scan_buffer_timer.setSingleShot(True)
         self._scan_buffer_timer.setInterval(75)
         self._scan_buffer_timer.timeout.connect(self._flush_scan_buffer)
+        self._stored_sort_section = 0
+        self._stored_sort_order = QtCore.Qt.AscendingOrder
 
         self.init_ui()
 
@@ -3092,7 +3166,17 @@ class ModManagerApp(QtWidgets.QWidget):
             if not self._cache_clear_triggered_this_refresh:
                 self.clear_sims4_cache()
 
-    def apply_configuration(self, mod_directory, cache_directory, backups_directory, sims_executable_path, sims_executable_arguments, log_extra_extensions, grab_logs_ignore_files):
+    def apply_configuration(
+        self,
+        mod_directory,
+        cache_directory,
+        backups_directory,
+        sims_executable_path,
+        sims_executable_arguments,
+        log_extra_extensions,
+        grab_logs_ignore_files,
+        log_level,
+    ):
         previous_mod_directory = self.settings.get("mod_directory", "")
         self.settings["mod_directory"] = mod_directory
         self.settings["sims_cache_directory"] = cache_directory
@@ -3101,7 +3185,13 @@ class ModManagerApp(QtWidgets.QWidget):
         self.settings["sims_executable_arguments"] = sims_executable_arguments
         self.settings["log_extra_extensions"] = sorted(set(log_extra_extensions))
         self.settings["grab_logs_ignore_files"] = list(grab_logs_ignore_files)
+        level_name = str(log_level or DEFAULT_LOG_LEVEL).upper()
+        if level_name not in LOG_LEVEL_CHOICES:
+            level_name = DEFAULT_LOG_LEVEL
+        self.settings["log_level"] = level_name
         save_settings(self.settings)
+        configure_logging(level_name)
+        LOGGER.info("Configuration enregistrée avec le niveau de log %s", level_name)
         self.update_mod_directory_label()
         self.update_launch_button_state()
 
@@ -3118,6 +3208,7 @@ class ModManagerApp(QtWidgets.QWidget):
         if not valid_roots:
             QtWidgets.QMessageBox.critical(self, "Erreur", "Sélectionne un dossier valide dans la configuration.")
             return
+        LOGGER.info("Lancement d'un scan sur %d dossier(s)", len(valid_roots))
         if self.scan_thread is not None and self.scan_thread.isRunning():
             self._pending_scan_request = (
                 list(valid_roots),
@@ -3144,8 +3235,14 @@ class ModManagerApp(QtWidgets.QWidget):
             self.mods_proxy.invalidateFilter()
         if hasattr(self, "table"):
             header = self.table.horizontalHeader()
-            self._stored_sort_section = header.sortIndicatorSection()
-            self._stored_sort_order = header.sortIndicatorOrder()
+            stored_section = header.sortIndicatorSection()
+            stored_order = header.sortIndicatorOrder()
+            if stored_section < 0 or stored_section >= header.count():
+                stored_section = 0 if header.count() > 0 else -1
+            if stored_order not in (QtCore.Qt.AscendingOrder, QtCore.Qt.DescendingOrder):
+                stored_order = QtCore.Qt.AscendingOrder
+            self._stored_sort_section = stored_section
+            self._stored_sort_order = stored_order
             self.table.setSortingEnabled(False)
 
         self._update_scan_status(status_message)
@@ -3174,6 +3271,7 @@ class ModManagerApp(QtWidgets.QWidget):
         self.scan_thread.finished.connect(self.scan_thread.deleteLater)
         self.scan_worker.finished.connect(self.scan_worker.deleteLater)
         self.scan_thread.start()
+        LOGGER.debug("Thread de scan démarré")
 
     def refresh_tree(self):
         folder = self.settings.get("mod_directory", "")
@@ -3596,12 +3694,14 @@ class ModManagerApp(QtWidgets.QWidget):
         self._pending_rows.extend(rows)
         if not self._scan_buffer_timer.isActive():
             self._scan_buffer_timer.start()
+        LOGGER.debug("Réception d'un paquet de %d ligne(s)", len(rows))
 
     def _flush_scan_buffer(self):
         if not self._pending_rows:
             return
         pending = self._pending_rows
         self._pending_rows = []
+        LOGGER.debug("Insertion de %d ligne(s) dans le modèle", len(pending))
         self.all_data_rows.extend(pending)
         if hasattr(self, "mods_model"):
             self.mods_model.add_rows(pending)
@@ -3646,12 +3746,18 @@ class ModManagerApp(QtWidgets.QWidget):
         self._cleanup_scan_thread()
         self._finish_scan_progress()
         self._set_scan_controls_enabled(True)
+        LOGGER.info("Scan terminé (succès=%s, message=%s)", success, message)
         if hasattr(self, "mods_proxy"):
             self.mods_proxy.setDynamicSortFilter(True)
             self.mods_proxy.invalidateFilter()
         if hasattr(self, "table"):
             self.table.setSortingEnabled(True)
-            self.table.sortByColumn(self._stored_sort_section, self._stored_sort_order)
+            column_count = self.mods_model.columnCount() if hasattr(self, "mods_model") else self.table.model().columnCount()
+            target_section = self._stored_sort_section
+            if not (0 <= target_section < column_count):
+                target_section = 0 if column_count > 0 else -1
+            if target_section >= 0 and column_count > 0:
+                self.table.sortByColumn(target_section, self._stored_sort_order)
         if success:
             self._update_scan_status("")
             if snapshot_changed:
@@ -3684,6 +3790,7 @@ class ModManagerApp(QtWidgets.QWidget):
 
     def _on_scan_error(self, message):
         if message:
+            LOGGER.error("Erreur remontée par le scan : %s", message)
             QtWidgets.QMessageBox.critical(self, "Erreur", message)
             self._scan_error_reported = True
 
@@ -3697,6 +3804,7 @@ class ModManagerApp(QtWidgets.QWidget):
         self._update_scan_status("Annulation en cours...")
         if hasattr(self, "cancel_scan_button") and self.cancel_scan_button is not None:
             self.cancel_scan_button.setEnabled(False)
+        LOGGER.info("Annulation du scan demandée par l'utilisateur")
 
     def closeEvent(self, event):
         if self._scan_stop_flag is not None and not self._scan_stop_flag.is_set():
