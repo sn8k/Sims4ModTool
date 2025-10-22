@@ -1,8 +1,8 @@
 # Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.18
-- **Dernière mise à jour :** 22/10/2025 08:00 UTC
+- **Version de l'application :** v3.24
+- **Dernière mise à jour :** 22/10/2025 09:37 UTC
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
@@ -14,6 +14,7 @@
 - Nettoyage guidé du cache Sims 4 via le bouton **Clear Sims4 Cache**.
 - Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement et possibilité d'exclure certains fichiers par nom.
 - Lancement direct de `TS4_X64.exe` avec arguments optionnels.
+- Installation de mods par glisser-déposer via la fenêtre **Mod Installer**, avec journalisation des installations, mise à jour dédiée, ajout et suppression d'add-ons.
 
 ## Prérequis
 - Python 3.9 ou supérieur.
@@ -67,6 +68,7 @@ Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de su
 - **Grab Logs** : déplace les fichiers journaux trouvés dans le dossier des mods vers un sous-dossier horodaté du dossier de backups.
 - **Launch Sims 4** : exécute `TS4_X64.exe` avec les arguments configurés (bouton désactivé si le chemin est invalide).
 - **Kill Sims 4** : termine le processus `TS4_x64.exe` en cours d'exécution.
+- **Mod Installer** : ouvre une fenêtre listant les mods installés via l'outil, accepte le glisser-déposer de fichiers `.package`, `.ts4script` ou `.zip`, gère la mise à jour ou l'ajout d'add-ons pour un mod existant et range automatiquement les fichiers dans des sous-dossiers dédiés du dossier de mods.
 
 ## Gestion des journaux
 Les fichiers dont l'extension correspond à `.log`, `.txt` ou toute extension supplémentaire configurée sont déplacés dans un dossier nommé `Logs_YYYYMMDD_HHMMSS` sous le dossier de backups (sauf ceux dont le nom figure dans la liste d'exclusion configurée). L'arborescence relative depuis le dossier de mods est conservée et l'explorateur est ouvert automatiquement à la fin de l'opération.
