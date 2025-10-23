@@ -1,8 +1,8 @@
-# Sims4ModTool
+﻿# Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.25
-- **Dernière mise à jour :** 22/10/2025 10:19 UTC
+- **Version de l'application :** v3.33
+- **Dernière mise à jour :** 23/10/2025
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
@@ -14,9 +14,12 @@
 - Nettoyage guidé du cache Sims 4 via le bouton **Clear Sims4 Cache**.
 - Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement et possibilité d'exclure certains fichiers par nom.
 - Lancement direct de `TS4_X64.exe` avec arguments optionnels.
-- Installation de mods par glisser-déposer via la fenêtre **Mod Installer**, avec journalisation des installations, mise à jour dédiée, ajout et suppression d'add-ons.
+- Archives .zip/.7z/.rar: extraction normalisée (temporaire) avec .ts4script qui définit la racine, puis copie vers Mods.
 - Actions de l'interface dotées d'icônes (Rafraîchir, Exporter, Nettoyer cache, Récupérer logs, Mod Installer, Outils, Group View, Kill, Configuration, Lancer le jeu).
   - Boutons d'actions normalisés en taille et disposés en grille adaptative, avec icônes au‑dessus des libellés.
+  - La taille des icônes des actions s’ajuste automatiquement selon l’espace disponible afin de préserver l’aire du tableau.
+  - Personnalisation : fond d'écran de l'application et fond du SplashScreen configurables dans **Configuration**.
+  - ATF : possibilité de marquer un mod ATF (tableau principal et Mod Installer). Les mods ATF s'affichent en texte noir sur fond rose et requièrent une confirmation avant mise à jour.
 
 ## Prérequis
 - Python 3.9 ou supérieur.
@@ -63,7 +66,7 @@ La table principale affiche une ligne par mod détecté avec les colonnes suivan
 
 Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de supprimer ou de lancer une recherche Google sur le mod sélectionné.
 
-## Boutons de l'interface
+## Boutons de l'interface\n- Informations jeu : affichage Version/Build en bas au centre (issu de config.log si présent).
 - **Analyser / Rafraîchir** : relance le scan du dossier de mods configuré.
 - **Exporter vers Excel** : crée ou met à jour le fichier `.xlsx` choisi.
 - **Clear Sims4 Cache** : supprime les fichiers/dossiers de cache connus et affiche un compte rendu.
@@ -122,14 +125,22 @@ Recent updates:
   - Kill Sims 4 attempts elevation on Windows when required (UAC prompt), with clear status.
   - Tools: “Correct resource.cfg” checks and fixes Mods\Resource.cfg to recommended defaults.
   - Column visibility: right‑click the table header to show/hide columns; preferences are saved and restored.
-  - Top bar: Filters group (left) and Actions group (right) for quicker access to filters and actions.
+   - Top bar: Filters group (left) and Actions group (right) for quicker access to filters and actions.
 
+- Tools additions:
+  - Check placement .ts4script: vérifie que les scripts `.ts4script` ne sont pas à plus d'un sous‑dossier de profondeur sous Mods; affiche une liste des contrevenants, ou un message "Tout va bien, tout le monde est à sa place 👍" si conforme.
+  - Scan dossier (mod) : choisissez n'importe quel dossier à analyser (option « Récursif » cochée par défaut) et affichez les résultats dans un tableau.
+  - L’outil consigne en debug les contrevenants et publie un résumé en niveau warning.
 - Duplicate Finder
   - Recursively scans subfolders; supports advanced mode by filename + size.
   - Progress bar and multi‑select delete.
+## Internationalisation
+- Fichiers de langue prêts sous `lang/` : `fr-fr.lng` et `en-us.lng`. Format JSON clé/valeur pour les titres, actions, filtres, outils et apparence.
+- Sélection de la langue (fr-FR / en-US) dans **Configuration**.
 
 - Logging
   - Central logging (console + `sims4modtool.log`) with configurable level in settings.
+  - Debug étendu (mise en page des actions, SplashScreen, lecture Version/Build, outils), avec un usage cohérent de info/warn/error.
 
 Requirements for 7z/rar:
 
@@ -147,3 +158,7 @@ Build
   - `powershell -ExecutionPolicy Bypass -File .\build.ps1`
   - Options: `-OneFile`, `-NoConsole`, `-Name <AppName>`, `-Icon <path.ico>`
   - Requires Python and PyInstaller. The script installs PyInstaller if missing.
+
+
+
+

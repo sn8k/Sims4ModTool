@@ -1,5 +1,233 @@
 [
     {
+        "name": "ATFChildren v6.4.0",
+        "type": "",
+        "installed_at": "2025-10-23T00:54:45",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\ATFChildren v6.4.0",
+        "source": "ATFChildren v6.4.0.7z",
+        "addons": [],
+        "files": [
+            "AllTheFallen_Children_Scripts.ts4script",
+            "AllTheFallen_Children_Tuning.package",
+            "DISCLAIMER.txt"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": "",
+        "atf": true
+    },
+    {
+        "name": "ATFInfants v1.0.0",
+        "type": "",
+        "installed_at": "2025-10-23T00:54:45",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\ATFInfants v1.0.0",
+        "source": "ATFInfants v1.0.0.7z",
+        "addons": [],
+        "files": [
+            "AllTheFallen_Infants_Scripts.ts4script",
+            "AllTheFallen_Infants_Tuning.package",
+            "DISCLAIMER.txt"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": "",
+        "atf": true
+    },
+    {
+        "name": "ATFPets v1.2.0",
+        "type": "",
+        "installed_at": "2025-10-23T00:54:44",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\ATFPets v1.2.0",
+        "source": "ATFPets v1.2.0.7z",
+        "addons": [],
+        "files": [
+            "AllTheFallen_Pets_Scripts.ts4script",
+            "AllTheFallen_Pets_Tuning.package",
+            "DISCLAIMER.txt"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": "",
+        "atf": true
+    },
+    {
+        "name": "AWE-VideoClerkCareer 1.0.7",
+        "type": "archive .zip",
+        "installed_at": "2025-10-22T23:06:05",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\AWE-VideoClerkCareer 1.0.7",
+        "source": "AWE-VideoClerkCareer 1.0.7.zip",
+        "addons": [],
+        "files": [
+            "AWE-VideoStoreClerk.ts4script",
+            "AWE-VideoStoreClerk.package"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": ""
+    },
+    {
+        "name": "JJ-MaidCafeCareer 1.0.7",
+        "type": "archive .zip",
+        "installed_at": "2025-10-22T23:06:05",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\JJ-MaidCafeCareer 1.0.7",
+        "source": "JJ-MaidCafeCareer 1.0.7.zip",
+        "addons": [],
+        "files": [
+            "JJ-MaidCafeCareer.package",
+            "Maid Cafe Career Info.pdf"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": ""
+    },
+    {
+        "name": "AWE-EscortCareer 1.3.4",
+        "type": "archive .zip",
+        "installed_at": "2025-10-22T23:06:05",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\AWE-EscortCareer 1.3.4",
+        "source": "AWE-EscortCareer 1.3.4.zip",
+        "addons": [],
+        "files": [
+            "AWE-EscortCareer.ts4script",
+            "AWE-EscortCareer.package",
+            "Escort Career Info.pdf"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": ""
+    },
+    {
+        "name": "AWE-ActorAndProducerCareers 2.8.1",
+        "type": "archive .zip",
+        "installed_at": "2025-10-22T23:06:05",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\AWE-ActorAndProducerCareers 2.8.1",
+        "source": "AWE-ActorAndProducerCareers 2.8.1.zip",
+        "addons": [],
+        "files": [
+            "AWE-PornCareer.ts4script",
+            "AWE-PornCareer.package",
+            "Career Info 2.8.0.pdf"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": ""
+    },
+    {
+        "name": "AWE-Core 1.1.6",
+        "type": "archive .zip",
+        "installed_at": "2025-10-22T23:06:05",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\AWE-Core 1.1.6",
+        "source": "AWE-Core 1.1.6.zip",
+        "addons": [],
+        "files": [
+            "AWE-Core.ts4script"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": ""
+    },
+    {
+        "name": "TwistedMexi's Better BuildBuy v4.3 Official",
+        "type": "archive .zip",
+        "installed_at": "2025-10-22T21:59:36",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\TwistedMexi's Better BuildBuy v4.3 Official",
+        "source": "TwistedMexi's Better BuildBuy v4.3 Official.zip",
+        "addons": [],
+        "files": [
+            "Tmex-BetterBuildBuy.ts4script",
+            "tmex-BetterBuildBuy.package",
+            "DRAG THE Tmex-BetterBuildBuy FOLDER TO MODS ROOT. THATS IT",
+            "Data/Filters.dat",
+            "Data/OrganizedDebugStrings.tmcatalog",
+            "Data/OrganizedDebug_BaseGame.tmbin",
+            "Data/OrganizedDebug_EP01.tmbin",
+            "Data/OrganizedDebug_EP02.tmbin",
+            "Data/OrganizedDebug_EP03.tmbin",
+            "Data/OrganizedDebug_EP04.tmbin",
+            "Data/OrganizedDebug_EP05.tmbin",
+            "Data/OrganizedDebug_EP06.tmbin",
+            "Data/OrganizedDebug_EP07.tmbin",
+            "Data/OrganizedDebug_EP08.tmbin",
+            "Data/OrganizedDebug_EP09.tmbin",
+            "Data/OrganizedDebug_EP10.tmbin",
+            "Data/OrganizedDebug_EP11.tmbin",
+            "Data/OrganizedDebug_EP12.tmbin",
+            "Data/OrganizedDebug_EP13.tmbin",
+            "Data/OrganizedDebug_EP14.tmbin",
+            "Data/OrganizedDebug_EP15.tmbin",
+            "Data/OrganizedDebug_EP16.tmbin",
+            "Data/OrganizedDebug_EP17.tmbin",
+            "Data/OrganizedDebug_EP18.tmbin",
+            "Data/OrganizedDebug_EP19.tmbin",
+            "Data/OrganizedDebug_EP20.tmbin",
+            "Data/OrganizedDebug_FP01.tmbin",
+            "Data/OrganizedDebug_GP01.tmbin",
+            "Data/OrganizedDebug_GP02.tmbin",
+            "Data/OrganizedDebug_GP03.tmbin",
+            "Data/OrganizedDebug_GP04.tmbin",
+            "Data/OrganizedDebug_GP05.tmbin",
+            "Data/OrganizedDebug_GP06.tmbin",
+            "Data/OrganizedDebug_GP07.tmbin",
+            "Data/OrganizedDebug_GP08.tmbin",
+            "Data/OrganizedDebug_GP09.tmbin",
+            "Data/OrganizedDebug_GP10.tmbin",
+            "Data/OrganizedDebug_GP11.tmbin",
+            "Data/OrganizedDebug_GP12.tmbin",
+            "Data/OrganizedDebug_Sim.tmbin",
+            "Data/OrganizedDebug_SP01.tmbin",
+            "Data/OrganizedDebug_SP03.tmbin",
+            "Data/OrganizedDebug_SP04.tmbin",
+            "Data/OrganizedDebug_SP05.tmbin",
+            "Data/OrganizedDebug_SP07.tmbin",
+            "Data/OrganizedDebug_SP08.tmbin",
+            "Data/OrganizedDebug_SP09.tmbin",
+            "Data/OrganizedDebug_SP11.tmbin",
+            "Data/OrganizedDebug_SP12.tmbin",
+            "Data/OrganizedDebug_SP13.tmbin",
+            "Data/OrganizedDebug_SP14.tmbin",
+            "Data/OrganizedDebug_SP15.tmbin",
+            "Data/OrganizedDebug_SP17.tmbin",
+            "Data/OrganizedDebug_SP18.tmbin",
+            "Data/OrganizedDebug_SP22.tmbin",
+            "Data/OrganizedDebug_SP33.tmbin",
+            "Data/OrganizedDebug_SP46.tmbin",
+            "Data/OrganizedDebug_SP49.tmbin",
+            "Data/OrganizedDebug_SP52.tmbin",
+            "Data/OrganizedDebug_SP53.tmbin",
+            "Data/OrganizedDebug_SP55.tmbin",
+            "Data/OrganizedDebug_SP59.tmbin",
+            "Data/OrganizedDebug_SP65.tmbin"
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": ""
+    },
+    {
+        "name": "lot51_bird_life_v1.1.2",
+        "type": "archive .zip",
+        "installed_at": "2025-10-22T21:22:00",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\lot51_bird_life_v1.1.2",
+        "source": "lot51_bird_life_v1.1.2.zip",
+        "addons": [],
+        "files": [
+            "lot51_bird_life.package",
+            "lot51_bird_life.ts4script"
+        ],
+        "mod_version": "1.1.2",
+        "url": "https://lot51.cc/mods/bird-life",
+        "disabled": false,
+        "disabled_path": ""
+    },
+    {
         "name": "Skarrd",
         "type": "archive .zip",
         "installed_at": "2025-10-22T18:07:00",
@@ -61,13 +289,17 @@
             "Skarrd/Skarrds_TShirt_long.package",
             "Skarrd/Skarrd_Brief_01.package",
             "Skarrd/Skarrd_Brief_02.package"
-        ]
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": ""
     },
     {
-        "name": "Perverted_Expansion_Pack Ver3.5.0 (1)",
+        "name": "Perverted_Expansion_Pack Ver3.5.0",
         "type": "archive .zip",
         "installed_at": "2025-10-22T18:06:43",
-        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\Perverted_Expansion_Pack Ver3.5.0 (1)",
+        "target_folder": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods\\Perverted_Expansion_Pack Ver3.5",
         "source": "Perverted_Expansion_Pack Ver3.5.0 (1).zip",
         "addons": [],
         "files": [
@@ -88,6 +320,10 @@
             "Skarrd_Perverted_Expansion_Pack_SexManiacAddon.ts4script",
             "Skarrd_Perverted_Expansion_Pack_VampiresAddon.package",
             "Skarrd_Perverted_Expansion_Pack_VampiresAddon.ts4script"
-        ]
+        ],
+        "mod_version": "",
+        "url": "",
+        "disabled": false,
+        "disabled_path": ""
     }
 ]

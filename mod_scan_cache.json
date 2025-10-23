@@ -1,43 +1,7 @@
 {
   "root": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods",
-  "generated_at": "2025-10-22T21:05:12Z",
+  "generated_at": "2025-10-23T00:55:21Z",
   "entries": [
-    {
-      "path": "!ATFChildren/AllTheFallen_Children_Scripts.ts4script",
-      "mtime": 1757457408,
-      "size": 433740,
-      "type": "ts4script"
-    },
-    {
-      "path": "!ATFChildren/AllTheFallen_Children_Tuning.package",
-      "mtime": 1756361212,
-      "size": 31551431,
-      "type": "package"
-    },
-    {
-      "path": "!ATFInfants/AllTheFallen_Infants_Scripts.ts4script",
-      "mtime": 1757457409,
-      "size": 375128,
-      "type": "ts4script"
-    },
-    {
-      "path": "!ATFInfants/AllTheFallen_Infants_Tuning.package",
-      "mtime": 1756361212,
-      "size": 4336437,
-      "type": "package"
-    },
-    {
-      "path": "!ATFPets/AllTheFallen_Pets_Scripts.ts4script",
-      "mtime": 1757457409,
-      "size": 428890,
-      "type": "ts4script"
-    },
-    {
-      "path": "!ATFPets/AllTheFallen_Pets_Tuning.package",
-      "mtime": 1756361212,
-      "size": 8399578,
-      "type": "package"
-    },
     {
       "path": "1 Utilities/Basemental-Venue-List_2.53.package",
       "mtime": 1760607927,
@@ -13617,12 +13581,6 @@
       "type": "package"
     },
     {
-      "path": "6 Gameplay Addons/lot51 Pack/lot51_bird_life.package",
-      "mtime": 1709682583,
-      "size": 40228,
-      "type": "package"
-    },
-    {
       "path": "6 Gameplay Addons/lot51 Pack/lot51_fashion_authority.package",
       "mtime": 1751667044,
       "size": 1441740,
@@ -13633,12 +13591,6 @@
       "mtime": 1751428852,
       "size": 13359426,
       "type": "package"
-    },
-    {
-      "path": "6 Gameplay Addons/lot51_bird_life.ts4script",
-      "mtime": 1709694595,
-      "size": 19084,
-      "type": "ts4script"
     },
     {
       "path": "6 Gameplay Addons/lot51_plumbbros.ts4script",
@@ -52887,6 +52839,42 @@
       "type": "package"
     },
     {
+      "path": "ATFChildren v6.4.0/AllTheFallen_Children_Scripts.ts4script",
+      "mtime": 1757457408,
+      "size": 433740,
+      "type": "ts4script"
+    },
+    {
+      "path": "ATFChildren v6.4.0/AllTheFallen_Children_Tuning.package",
+      "mtime": 1756361212,
+      "size": 31551431,
+      "type": "package"
+    },
+    {
+      "path": "ATFInfants v1.0.0/AllTheFallen_Infants_Scripts.ts4script",
+      "mtime": 1757457409,
+      "size": 375128,
+      "type": "ts4script"
+    },
+    {
+      "path": "ATFInfants v1.0.0/AllTheFallen_Infants_Tuning.package",
+      "mtime": 1756361212,
+      "size": 4336437,
+      "type": "package"
+    },
+    {
+      "path": "ATFPets v1.2.0/AllTheFallen_Pets_Scripts.ts4script",
+      "mtime": 1757457409,
+      "size": 428890,
+      "type": "ts4script"
+    },
+    {
+      "path": "ATFPets v1.2.0/AllTheFallen_Pets_Tuning.package",
+      "mtime": 1756361212,
+      "size": 8399578,
+      "type": "package"
+    },
+    {
       "path": "Aurum_female_Shorts_5.package",
       "mtime": 1747259960,
       "size": 1439235,
@@ -52897,6 +52885,48 @@
       "mtime": 1748269758,
       "size": 2411974,
       "type": "package"
+    },
+    {
+      "path": "AWE-ActorAndProducerCareers 2.8.1/AWE-PornCareer.package",
+      "mtime": 1759394266,
+      "size": 1590292,
+      "type": "package"
+    },
+    {
+      "path": "AWE-ActorAndProducerCareers 2.8.1/AWE-PornCareer.ts4script",
+      "mtime": 1759406704,
+      "size": 4027,
+      "type": "ts4script"
+    },
+    {
+      "path": "AWE-Core 1.1.6/AWE-Core.ts4script",
+      "mtime": 1759406440,
+      "size": 9619,
+      "type": "ts4script"
+    },
+    {
+      "path": "AWE-EscortCareer 1.3.4/AWE-EscortCareer.package",
+      "mtime": 1759404052,
+      "size": 352841,
+      "type": "package"
+    },
+    {
+      "path": "AWE-EscortCareer 1.3.4/AWE-EscortCareer.ts4script",
+      "mtime": 1759406558,
+      "size": 3566,
+      "type": "ts4script"
+    },
+    {
+      "path": "AWE-VideoClerkCareer 1.0.7/AWE-VideoStoreClerk.package",
+      "mtime": 1759337602,
+      "size": 551285,
+      "type": "package"
+    },
+    {
+      "path": "AWE-VideoClerkCareer 1.0.7/AWE-VideoStoreClerk.ts4script",
+      "mtime": 1752156794,
+      "size": 2690,
+      "type": "ts4script"
     },
     {
       "path": "BackTrack_fCharmed_Low_Baggy_Jeans(Bandana)ACC.package",
@@ -54699,6 +54729,12 @@
       "type": "package"
     },
     {
+      "path": "JJ-MaidCafeCareer 1.0.7/JJ-MaidCafeCareer.package",
+      "mtime": 1759337588,
+      "size": 207403,
+      "type": "package"
+    },
+    {
       "path": "KiaraSims4Mods_StayAtHomeParent_Aspiration.package",
       "mtime": 1722069866,
       "size": 39935,
@@ -55068,6 +55104,18 @@
       "path": "LittleMsSam_UltrasoundScan.ts4script",
       "mtime": 1756222886,
       "size": 2942,
+      "type": "ts4script"
+    },
+    {
+      "path": "lot51_bird_life_v1.1.2/lot51_bird_life.package",
+      "mtime": 1709657384,
+      "size": 40228,
+      "type": "package"
+    },
+    {
+      "path": "lot51_bird_life_v1.1.2/lot51_bird_life.ts4script",
+      "mtime": 1709669396,
+      "size": 19084,
       "type": "ts4script"
     },
     {
@@ -55458,24 +55506,6 @@
       "path": "NisasWickedPerversions/NisaK_Wicked_Perversions.ts4script",
       "mtime": 1759614244,
       "size": 1036891,
-      "type": "ts4script"
-    },
-    {
-      "path": "NSFW Mods/AWE-Core.ts4script",
-      "mtime": 1749849084,
-      "size": 9602,
-      "type": "ts4script"
-    },
-    {
-      "path": "NSFW Mods/AWE-EscortCareer.ts4script",
-      "mtime": 1749849084,
-      "size": 3564,
-      "type": "ts4script"
-    },
-    {
-      "path": "NSFW Mods/AWE-PornCareer.ts4script",
-      "mtime": 1749849084,
-      "size": 4025,
       "type": "ts4script"
     },
     {
@@ -55897,24 +55927,6 @@
       "mtime": 1758665616,
       "size": 515164,
       "type": "ts4script"
-    },
-    {
-      "path": "NSFW Mods/Misc/AWE-EscortCareer.package",
-      "mtime": 1749849084,
-      "size": 350524,
-      "type": "package"
-    },
-    {
-      "path": "NSFW Mods/Misc/AWE-PornCareer.package",
-      "mtime": 1749849084,
-      "size": 1559100,
-      "type": "package"
-    },
-    {
-      "path": "NSFW Mods/Misc/AWE-SugarRelationships.package",
-      "mtime": 1744314304,
-      "size": 269608,
-      "type": "package"
     },
     {
       "path": "NSFW Mods/Misc/NerdyDoll_CupidsCorner_LowerRefreshRate_NoWaitingTime.package",
@@ -57777,103 +57789,103 @@
       "type": "ts4script"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack.package",
       "mtime": 1759390550,
       "size": 10872991,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack.ts4script",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack.ts4script",
       "mtime": 1759302412,
       "size": 10228,
       "type": "ts4script"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_CustomDrinksAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_CustomDrinksAddon.package",
       "mtime": 1758804230,
       "size": 265907,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_DeviousAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_DeviousAddon.package",
       "mtime": 1756543528,
       "size": 144111,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_DeviousAddon.ts4script",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_DeviousAddon.ts4script",
       "mtime": 1756543426,
       "size": 2300,
       "type": "ts4script"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_GetFamousAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_GetFamousAddon.package",
       "mtime": 1755687984,
       "size": 13712,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_GetFamousAddon.ts4script",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_GetFamousAddon.ts4script",
       "mtime": 1755687696,
       "size": 1719,
       "type": "ts4script"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_IslandLivingAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_IslandLivingAddon.package",
       "mtime": 1755687998,
       "size": 10426,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_ParanormalAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_ParanormalAddon.package",
       "mtime": 1759063682,
       "size": 101997,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_ParanormalAddon.ts4script",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_ParanormalAddon.ts4script",
       "mtime": 1758883240,
       "size": 2452,
       "type": "ts4script"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_RealmofMagicAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_RealmofMagicAddon.package",
       "mtime": 1758883322,
       "size": 91248,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_RealmofMagicAddon.ts4script",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_RealmofMagicAddon.ts4script",
       "mtime": 1758883256,
       "size": 1764,
       "type": "ts4script"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_SeasonsAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_SeasonsAddon.package",
       "mtime": 1758706814,
       "size": 16760,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_SexManiacAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_SexManiacAddon.package",
       "mtime": 1757060222,
       "size": 490592,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_SexManiacAddon.ts4script",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_SexManiacAddon.ts4script",
       "mtime": 1757060202,
       "size": 3035,
       "type": "ts4script"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_VampiresAddon.package",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_VampiresAddon.package",
       "mtime": 1758792910,
       "size": 156254,
       "type": "package"
     },
     {
-      "path": "Perverted_Expansion_Pack Ver3.5.0 (1)/Skarrd_Perverted_Expansion_Pack_VampiresAddon.ts4script",
+      "path": "Perverted_Expansion_Pack Ver3.5/Skarrd_Perverted_Expansion_Pack_VampiresAddon.ts4script",
       "mtime": 1758792884,
       "size": 480,
       "type": "ts4script"
@@ -60687,21 +60699,21 @@
       "type": "ts4script"
     },
     {
-      "path": "Tmex-BetterBuildBuy/tmex-BetterBuildBuy.package",
-      "mtime": 1756947584,
+      "path": "Tmex-ModGuard.ts4script",
+      "mtime": 1759763892,
+      "size": 12544,
+      "type": "ts4script"
+    },
+    {
+      "path": "TwistedMexi's Better BuildBuy v4.3 Official/tmex-BetterBuildBuy.package",
+      "mtime": 1756925986,
       "size": 5277079,
       "type": "package"
     },
     {
-      "path": "Tmex-BetterBuildBuy/Tmex-BetterBuildBuy.ts4script",
-      "mtime": 1759428646,
+      "path": "TwistedMexi's Better BuildBuy v4.3 Official/Tmex-BetterBuildBuy.ts4script",
+      "mtime": 1759407048,
       "size": 33186,
-      "type": "ts4script"
-    },
-    {
-      "path": "Tmex-ModGuard.ts4script",
-      "mtime": 1759763892,
-      "size": 12544,
       "type": "ts4script"
     },
     {

@@ -1,0 +1,23 @@
+{
+  "app.title": "Gestionnaire de Mods Sims 4",
+  "actions.scan": "Analyser / Rafraîchir",
+  "actions.export": "Exporter vers Excel",
+  "actions.clear_cache": "Clear Sims4 Cache",
+  "actions.grab_logs": "Grab Logs",
+  "actions.mod_installer": "Mod Installer",
+  "actions.tools": "Outils",
+  "actions.group_view": "Group View",
+  "actions.kill": "Kill Sims 4",
+  "actions.configuration": "Configuration",
+  "actions.launch": "Lancer Les Sims 4",
+  "filters.title": "Filtres",
+  "filters.versions": "Versions",
+  "search.show": "Afficher recherche",
+  "search.instant": "Instant search",
+  "search.label": "Recherche mod :",
+  "tools.scan_folder": "Scan dossier (mod)",
+  "tools.check_ts4": "Check placement .ts4script",
+  "appearance.title": "Apparence",
+  "appearance.app_bg": "Fond d'écran (app)",
+  "appearance.splash_bg": "Fond d'écran (splash)"
+}

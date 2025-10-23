@@ -150,3 +150,341 @@
 2025-10-22 23:05:07 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
 2025-10-22 23:05:12 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
 2025-10-22 23:05:15 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 10000
+2025-10-22 23:18:34 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-22 23:18:34 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-22 23:18:34 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:18:34 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:18:34 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:18:39 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-22 23:18:41 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 10000
+2025-10-22 23:18:57 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:18:57 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:19:00 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-22 23:19:02 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 64
+2025-10-22 23:19:08 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:19:10 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:19:39 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:19:39 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:20:27 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:20:28 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:20:30 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-22 23:20:32 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 126
+2025-10-22 23:21:39 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:21:39 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:21:42 [DEBUG] Sims4ModTool: Scan complete. Found 10124 relevant files
+2025-10-22 23:21:44 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 125
+2025-10-22 23:21:46 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-22 23:22:38 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:22:38 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:22:38 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:22:41 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-22 23:22:43 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 126
+2025-10-22 23:22:45 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-22 23:26:43 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:26:43 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:26:43 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:26:46 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-22 23:26:48 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 126
+2025-10-22 23:26:51 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-22 23:27:07 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:27:07 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:27:10 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-22 23:27:12 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 126
+2025-10-22 23:27:12 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:27:12 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:27:15 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-22 23:27:17 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 126
+2025-10-22 23:43:11 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-22 23:43:11 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-22 23:43:11 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:43:11 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:43:11 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:43:16 [DEBUG] Sims4ModTool: Scan complete. Found 10124 relevant files
+2025-10-22 23:43:18 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 125
+2025-10-22 23:43:20 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-22 23:59:11 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-22 23:59:11 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-22 23:59:11 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:59:11 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:59:11 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:59:16 [DEBUG] Sims4ModTool: Scan complete. Found 10124 relevant files
+2025-10-22 23:59:18 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 125
+2025-10-22 23:59:58 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-22 23:59:58 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-22 23:59:58 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:00:01 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 00:00:03 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 126
+2025-10-23 00:00:05 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-23 00:00:36 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 00:00:36 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:00:39 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 00:00:41 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 66
+2025-10-23 00:09:07 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 00:09:07 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 00:09:07 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 00:09:07 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:09:07 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:09:18 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 00:09:20 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 66
+2025-10-23 00:15:31 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 00:15:31 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 00:15:31 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 00:15:31 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:15:31 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:15:44 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 00:15:46 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 66
+2025-10-23 00:15:48 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-23 00:24:53 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 00:24:53 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 00:24:53 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 00:24:53 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:24:53 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:25:06 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 00:25:09 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 66
+2025-10-23 00:28:03 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 00:28:25 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 00:28:25 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:28:28 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 00:28:30 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 66
+2025-10-23 00:28:31 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 00:28:31 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:28:34 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 00:28:36 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 66
+2025-10-23 00:46:43 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 00:46:43 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 00:46:43 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 00:46:43 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:46:43 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 00:46:54 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 00:46:57 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 66
+2025-10-23 01:00:04 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:00:09 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:00:10 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:00:13 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:00:22 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:00:22 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 01:00:26 [DEBUG] Sims4ModTool: Scan complete. Found 10126 relevant files
+2025-10-23 01:00:28 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 10010
+2025-10-23 01:00:32 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:07:09 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:07:09 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 01:07:09 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 01:07:12 [DEBUG] Sims4ModTool: Scan complete. Found 10128 relevant files
+2025-10-23 01:07:15 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 10012
+2025-10-23 01:07:17 [INFO] Sims4ModTool: Cache cleared. Removed: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Missing: —, Errors: —
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:07:50 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 01:07:50 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 01:07:57 [DEBUG] Sims4ModTool: Actions layout: group_width=1432, min_tile=150, cols=8
+2025-10-23 01:07:57 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 01:07:57 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 01:08:04 [DEBUG] Sims4ModTool: Scan complete. Found 10128 relevant files
+2025-10-23 01:08:22 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 10012
+2025-10-23 01:08:24 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:08:24 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 01:08:27 [DEBUG] Sims4ModTool: Scan complete. Found 10128 relevant files
+2025-10-23 01:08:29 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 71
+2025-10-23 01:09:35 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 01:09:35 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 01:09:38 [DEBUG] Sims4ModTool: Scan complete. Found 10128 relevant files
+2025-10-23 01:09:40 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 127
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:17:27 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:17:27 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:17:40 [DEBUG] Sims4ModTool: Scan complete. Found 10128 relevant files
+2025-10-23 02:17:42 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 127
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:30:54 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:30:54 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:31:00 [DEBUG] Sims4ModTool: Actions layout: group_width=1432, min_tile=150, cols=8
+2025-10-23 02:31:00 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:31:00 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:31:06 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:31:08 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 124
+2025-10-23 02:31:10 [INFO] Sims4ModTool: Cache cleared. Removed: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Missing: —, Errors: —
+2025-10-23 02:32:17 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:32:17 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:32:17 [INFO] Sims4ModTool: Configuration updated (mod dir: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods)
+2025-10-23 02:32:17 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:32:17 [INFO] Sims4ModTool: Log level set to DEBUG
+2025-10-23 02:32:23 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:32:24 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:32:24 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:32:29 [DEBUG] Sims4ModTool: Actions layout: group_width=1432, min_tile=150, cols=8
+2025-10-23 02:32:29 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:32:29 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:32:37 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:32:39 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 124
+2025-10-23 02:32:41 [DEBUG] Sims4ModTool: Scanning directory: C:\Users\sn8k\Documents\Electronic Arts\Les Sims 4\Mods
+2025-10-23 02:32:42 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:32:44 [INFO] Sims4ModTool: Folder scan complete: 124 rows for C:\Users\sn8k\Documents\Electronic Arts\Les Sims 4\Mods
+2025-10-23 02:33:10 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:33:10 [DEBUG] Sims4ModTool: Scan complete. Found 1517 relevant files
+2025-10-23 02:33:10 [INFO] Sims4ModTool: Folder scan complete: 1 rows for C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:33:33 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:33:33 [DEBUG] Sims4ModTool: Scan complete. Found 1517 relevant files
+2025-10-23 02:33:33 [INFO] Sims4ModTool: Folder scan complete: 1 rows for C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:39:14 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:39:14 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:39:27 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:39:29 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 124
+2025-10-23 02:39:31 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-23 02:39:34 [DEBUG] Sims4ModTool: Actions layout: group_width=1432, min_tile=150, cols=8
+2025-10-23 02:39:34 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:39:34 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:43:30 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:43:30 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:43:37 [DEBUG] Sims4ModTool: Actions layout: group_width=1432, min_tile=150, cols=8
+2025-10-23 02:43:37 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:43:37 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:43:43 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:43:45 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 124
+2025-10-23 02:43:48 [DEBUG] Sims4ModTool: Scanning directory: C:\Users\sn8k\Documents\Electronic Arts\Les Sims 4\Mods
+2025-10-23 02:43:48 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:43:50 [INFO] Sims4ModTool: Folder scan complete: 124 rows for C:\Users\sn8k\Documents\Electronic Arts\Les Sims 4\Mods
+2025-10-23 02:44:06 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/6 Gameplay Addons
+2025-10-23 02:44:06 [DEBUG] Sims4ModTool: Scan complete. Found 729 relevant files
+2025-10-23 02:44:06 [INFO] Sims4ModTool: Folder scan complete: 15 rows for C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/6 Gameplay Addons
+2025-10-23 02:44:20 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:44:20 [DEBUG] Sims4ModTool: Scan complete. Found 1517 relevant files
+2025-10-23 02:44:20 [INFO] Sims4ModTool: Folder scan complete: 1 rows for C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:44:23 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:44:23 [DEBUG] Sims4ModTool: Scan complete. Found 24 relevant files
+2025-10-23 02:44:23 [INFO] Sims4ModTool: Folder scan complete: 1 rows for C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:44:24 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:44:24 [DEBUG] Sims4ModTool: Scan complete. Found 1517 relevant files
+2025-10-23 02:44:24 [INFO] Sims4ModTool: Folder scan complete: 1 rows for C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:46:10 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:46:10 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:46:23 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:46:25 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 124
+2025-10-23 02:48:26 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-23 02:48:45 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:48:45 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:48:49 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:48:56 [DEBUG] Sims4ModTool: Actions layout: group_width=1432, min_tile=150, cols=8
+2025-10-23 02:48:56 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:48:56 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:49:05 [DEBUG] Sims4ModTool: Table refreshed only. Rows: 10009
+2025-10-23 02:49:08 [DEBUG] Sims4ModTool: Scanning directory: C:\Users\sn8k\Documents\Electronic Arts\Les Sims 4\Mods
+2025-10-23 02:49:09 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:49:11 [INFO] Sims4ModTool: Folder scan complete: 10009 rows for C:\Users\sn8k\Documents\Electronic Arts\Les Sims 4\Mods
+2025-10-23 02:49:29 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:49:29 [DEBUG] Sims4ModTool: Scan complete. Found 1517 relevant files
+2025-10-23 02:49:29 [INFO] Sims4ModTool: Folder scan complete: 1516 rows for C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods/8 VisualOverhaul
+2025-10-23 02:50:25 [DEBUG] Sims4ModTool: TS4Script placement check start: root=C:\Users\sn8k\Documents\Electronic Arts\Les Sims 4\Mods, backups=D:\Nouveau dossier
+2025-10-23 02:50:25 [INFO] Sims4ModTool: TS4Script placement OK: no offenders found
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:51:53 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:51:53 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:52:06 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:52:07 [DEBUG] Sims4ModTool: Actions layout: group_width=1432, min_tile=150, cols=8
+2025-10-23 02:52:07 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:52:07 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:52:22 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 10009
+2025-10-23 02:52:24 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —
+2025-10-23 02:53:54 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Settings loaded from settings.json
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Application starting with log level: DEBUG
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Actions layout: group_width=100, min_tile=150, cols=2
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Action icon sizing: group=100, cols=2, tile=100, icon=40px
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Read game info: version=1.118.257.1020, build=Release DX11 64-bit from C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4\config.log
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Actions layout: group_width=386, min_tile=150, cols=2
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Action icon sizing: group=386, cols=2, tile=179, icon=40px
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:53:55 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:53:55 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:54:07 [DEBUG] Sims4ModTool: Scan complete. Found 10122 relevant files
+2025-10-23 02:54:24 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 10009
+2025-10-23 02:54:34 [DEBUG] Sims4ModTool: Actions layout: group_width=1432, min_tile=150, cols=8
+2025-10-23 02:54:34 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:54:34 [DEBUG] Sims4ModTool: Action icon sizing: group=1432, cols=8, tile=166, icon=40px
+2025-10-23 02:55:17 [DEBUG] Sims4ModTool: Settings saved to settings.json
+2025-10-23 02:55:17 [INFO] Sims4ModTool: Refreshing tree for directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:55:17 [DEBUG] Sims4ModTool: Scanning directory: C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods
+2025-10-23 02:55:21 [DEBUG] Sims4ModTool: Scan complete. Found 10128 relevant files
+2025-10-23 02:55:38 [DEBUG] Sims4ModTool: Tree refreshed. Rows: 10012
+2025-10-23 02:55:40 [INFO] Sims4ModTool: Cache cleared. Removed: —, Missing: localthumbcache.package, localsimtexturecache.package, avatarcache.package, cachestr, onlinethumbnailcache, Errors: —

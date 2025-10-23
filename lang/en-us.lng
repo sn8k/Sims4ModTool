@@ -1,0 +1,23 @@
+{
+  "app.title": "Sims 4 Mod Manager",
+  "actions.scan": "Analyze / Refresh",
+  "actions.export": "Export to Excel",
+  "actions.clear_cache": "Clear Sims4 Cache",
+  "actions.grab_logs": "Grab Logs",
+  "actions.mod_installer": "Mod Installer",
+  "actions.tools": "Tools",
+  "actions.group_view": "Group View",
+  "actions.kill": "Kill Sims 4",
+  "actions.configuration": "Configuration",
+  "actions.launch": "Launch Sims 4",
+  "filters.title": "Filters",
+  "filters.versions": "Versions",
+  "search.show": "Show search",
+  "search.instant": "Instant search",
+  "search.label": "Search mod:",
+  "tools.scan_folder": "Scan folder (mod)",
+  "tools.check_ts4": "Check .ts4script placement",
+  "appearance.title": "Appearance",
+  "appearance.app_bg": "Background (app)",
+  "appearance.splash_bg": "Background (splash)"
+}

@@ -1,7 +1,7 @@
 {
     "version_filter_start": "",
     "version_filter_end": "",
-    "enable_version_filters": true,
+    "enable_version_filters": false,
     "show_package_mods": true,
     "show_ts4script_mods": true,
     "mod_directory": "C:/Users/sn8k/Documents/Electronic Arts/Les Sims 4/Mods",
@@ -14,15 +14,20 @@
     "grab_logs_ignore_files": [],
     "ignored_mods": [],
     "show_ignored": true,
-    "show_search_results": false,
+    "show_search_results": true,
     "log_level": "DEBUG",
-    "instant_search": false,
-    "file_filter_mode": "package",
+    "instant_search": true,
+    "file_filter_mode": "both",
     "auto_scan_on_start": true,
     "hidden_columns": [
         0,
+        2,
         7,
         8
     ],
-    "show_disabled_only": false
+    "show_disabled_only": false,
+    "installer_hidden_columns": [],
+    "background_image_path": "C:/Users/sn8k/Pictures/Cyberpunk 2077/photomode_22092025_004630.png",
+    "splash_background_image_path": "C:/Users/sn8k/Pictures/Cyberpunk 2077/photomode_22092025_140619.png",
+    "language": "fr-fr"
 }
