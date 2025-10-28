@@ -16,9 +16,15 @@ function Ensure-Python {
 }
 
 function Ensure-PyInstaller {
-    if (-not (python -m pip show pyinstaller 2>$null)) {
+    # Check if PyInstaller is available via pip
+    $null = & python -m pip show pyinstaller 2>$null
+    if ($LASTEXITCODE -ne 0) {
         Write-Host "Installing PyInstaller..."
-        python -m pip install --user pyinstaller || (Write-Error "Failed to install PyInstaller"; exit 1)
+        & python -m pip install --user pyinstaller
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error "Failed to install PyInstaller"
+            exit 1
+        }
     }
 }
 
@@ -28,6 +34,11 @@ function Build-App {
     if ($NoConsole) { $opts += "--noconsole" }
     if ($Icon -and (Test-Path $Icon)) { $opts += @("--icon", $Icon) }
     $opts += @("--name", $Name)
+    # Keep the build environment clean and avoid Qt binding conflicts
+    $opts += "--clean"
+    $opts += @("--exclude-module", "PySide6")
+    $opts += @("--exclude-module", "PySide2")
+    $opts += @("--exclude-module", "PyQt6")
 
     # Data files if needed (adjust as required)
     foreach ($data in @("version_release.json")) {
@@ -49,4 +60,3 @@ function Build-App {
 Ensure-Python
 Ensure-PyInstaller
 Build-App
-
