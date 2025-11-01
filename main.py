@@ -34,6 +34,8 @@ from openpyxl import Workbook
 from pathlib import Path
 
 from modules.log_manager import LogManagerDialog, LogAnalyzerHooks
+from modules.ts4script_search import Ts4ScriptSearchDialog
+from modules.id_conflict_viewer import IDConflictViewerDialog as IDConflictViewerDialogV2
 
 # Qt bindings import shim (supports PyQt5/PySide2/PySide6/PyQt6)
 try:
@@ -180,8 +182,8 @@ class ScanWorker(QtCore.QObject):
 SETTINGS_PATH = "settings.json"
 IGNORE_LIST_PATH = "ignorelist.txt"
 VERSION_RELEASE_PATH = "version_release.json"
-APP_VERSION = "v3.45.0"
-APP_VERSION_DATE = "31/10/2025 12:00 UTC"
+APP_VERSION = "v3.48.0"
+APP_VERSION_DATE = "02/11/2025 18:00 UTC"
 INSTALLED_MODS_PATH = "installed_mods.json"
 MOD_SCAN_CACHE_PATH = "mod_scan_cache.json"
 MOD_MARKER_FILENAME = ".s4mt_mod_marker.json"
@@ -5864,302 +5866,6 @@ class FolderScannerDialog(QtWidgets.QDialog):
 
 
 
-class Ts4ScriptSearchDialog(QtWidgets.QDialog):
-    def __init__(self, parent, start_directory):
-        super().__init__(parent)
-        self.setWindowTitle("Find in ts4script")
-        self.setModal(True)
-        try:
-            self.setWindowFlags(self.windowFlags() | QtCore.Qt.Window)
-            self.setSizeGripEnabled(True)
-        except Exception:
-            pass
-        self.resize(900, 580)
-        self.parent_app = parent
-        self.scan_directory = os.path.abspath(start_directory) if start_directory else ""
-
-        layout = QtWidgets.QVBoxLayout(self)
-
-        # Path + patterns controls
-        path_layout = QtWidgets.QHBoxLayout()
-        path_layout.addWidget(QtWidgets.QLabel("Dossier à scanner :", self))
-        self.path_edit = QtWidgets.QLineEdit(self)
-        self.path_edit.setText(self.scan_directory)
-        path_layout.addWidget(self.path_edit, stretch=1)
-        browse_btn = QtWidgets.QPushButton("Parcourir…", self)
-        browse_btn.clicked.connect(self._browse)
-        path_layout.addWidget(browse_btn)
-        self.recursive_checkbox = QtWidgets.QCheckBox("Récursif", self)
-        self.recursive_checkbox.setChecked(True)
-        path_layout.addWidget(self.recursive_checkbox)
-        layout.addLayout(path_layout)
-
-        patterns_layout = QtWidgets.QHBoxLayout()
-        patterns_layout.addWidget(QtWidgets.QLabel("Noms à rechercher :", self))
-        self.patterns_edit = QtWidgets.QLineEdit(self)
-        self.patterns_edit.setPlaceholderText("ex: *_Tuning.xml, *Interactions*.py; tuning_*.xml")
-        patterns_layout.addWidget(self.patterns_edit, stretch=1)
-        run_btn = QtWidgets.QPushButton("Analyser", self)
-        run_btn.clicked.connect(self._run_search)
-        patterns_layout.addWidget(run_btn)
-        layout.addLayout(patterns_layout)
-
-        # Table (no filters; standalone view)
-        self.table = QtWidgets.QTableWidget(self)
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["occurence", "filename", "chemin", "date"])
-        header = self.table.horizontalHeader()
-        try:
-            header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-            header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
-            header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-            header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
-        except Exception:
-            pass
-        try:
-            header.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-            header.customContextMenuRequested.connect(self._show_header_menu)
-            self.table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
-            self.table.customContextMenuRequested.connect(self.show_context_menu)
-        except Exception:
-            pass
-        self.table.setSortingEnabled(True)
-        self.table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        layout.addWidget(self.table, stretch=1)
-
-        # Footer with progress
-        footer = QtWidgets.QHBoxLayout()
-        self.status_label = QtWidgets.QLabel("", self)
-        footer.addWidget(self.status_label)
-        self.progress_bar = QtWidgets.QProgressBar(self)
-        self.progress_bar.setVisible(False)
-        self.progress_bar.setMinimum(0)
-        self.progress_bar.setMaximum(1)
-        self.progress_bar.setValue(0)
-        footer.addWidget(self.progress_bar, stretch=1)
-        close_btn = QtWidgets.QPushButton("Fermer", self)
-        close_btn.clicked.connect(self.accept)
-        footer.addWidget(close_btn)
-        layout.addLayout(footer)
-
-        # Auto-run if path present
-        if self.scan_directory and os.path.isdir(self.scan_directory):
-            QtCore.QTimer.singleShot(0, self._run_search)
-
-    def _browse(self):
-        selected = QtWidgets.QFileDialog.getExistingDirectory(self, "Choisir un dossier à scanner")
-        if selected:
-            self.scan_directory = selected
-            self.path_edit.setText(selected)
-
-    def _parse_patterns(self, text):
-        raw = re.split(r"[,;\s]+", text or "")
-        patterns = [p.strip() for p in raw if p and p.strip()]
-        # Deduplicate keeping order
-        seen = set()
-        ordered = []
-        for p in patterns:
-            key = p.casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            ordered.append(p)
-        return ordered
-
-    def _iter_ts4scripts(self, root, recursive=True):
-        if not recursive:
-            try:
-                for file_name in os.listdir(root):
-                    full = os.path.join(root, file_name)
-                    if os.path.isfile(full) and file_name.lower().endswith(".ts4script"):
-                        yield full
-            except OSError:
-                return
-            return
-        for current_root, _dirs, files in os.walk(root):
-            for file_name in files:
-                if not file_name.lower().endswith(".ts4script"):
-                    continue
-                yield os.path.join(current_root, file_name)
-
-    def _run_search(self):
-        directory = self.path_edit.text().strip()
-        if not directory or not os.path.isdir(directory):
-            QtWidgets.QMessageBox.warning(self, "Dossier invalide", "Sélectionne un dossier existant à analyser.")
-            return
-        patterns = self._parse_patterns(self.patterns_edit.text())
-        if not patterns:
-            QtWidgets.QMessageBox.information(self, "Recherche", "Saisis au moins un nom de fichier (wildcards autorisés).")
-            return
-
-        # Prepare matching (case-insensitive)
-        lowered = [p.casefold() for p in patterns]
-        recursive = bool(self.recursive_checkbox.isChecked())
-
-        # Enumerate
-        self.table.setRowCount(0)
-        self.status_label.setText("Analyse en cours…")
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setMinimum(0)
-        self.progress_bar.setMaximum(0)  # busy during enumeration
-        self.progress_bar.setValue(0)
-        QtWidgets.QApplication.processEvents()
-
-        files = list(self._iter_ts4scripts(directory, recursive=recursive))
-        total = len(files)
-        self.progress_bar.setMaximum(max(1, total))
-        self.progress_bar.setValue(0)
-
-        rows = []
-        processed = 0
-        for ts4_path in files:
-            ts4_name = os.path.basename(ts4_path)
-            file_dt = None
-            try:
-                st = os.stat(ts4_path)
-                file_dt = datetime.fromtimestamp(st.st_mtime)
-            except OSError:
-                file_dt = None
-            try:
-                with zipfile.ZipFile(ts4_path, 'r') as zf:
-                    for info in zf.infolist():
-                        member = info.filename
-                        base = os.path.basename(member)
-                        m_low = member.casefold()
-                        b_low = base.casefold()
-                        matched = False
-                        for pat in lowered:
-                            # wildcard-aware: if contains * or ?, use fnmatch; else substring match
-                            if ('*' in pat) or ('?' in pat):
-                                if (fnmatch.fnmatch(m_low, pat) or fnmatch.fnmatch(b_low, pat)):
-                                    matched = True
-                                    break
-                            else:
-                                if pat in m_low or pat in b_low:
-                                    matched = True
-                                    break
-                        if matched:
-                            rows.append({
-                                "occurence": member,
-                                "filename": ts4_name,
-                                "chemin": ts4_path,
-                                "date": format_datetime(file_dt) if file_dt else "",
-                            })
-            except zipfile.BadZipFile:
-                # Ignore invalid ts4script archives
-                pass
-            except Exception:
-                # Best-effort search; ignore unexpected errors per file
-                pass
-            processed += 1
-            if processed % 5 == 0 or processed == total:
-                self.progress_bar.setValue(processed)
-                QtWidgets.QApplication.processEvents()
-
-        self._render(rows)
-        self.progress_bar.setVisible(False)
-        self.status_label.setText(f"{len(rows)} correspondance(s)")
-
-    def _render(self, rows):
-        self.table.setSortingEnabled(False)
-        try:
-            self.table.clearContents()
-        except Exception:
-            pass
-        self.table.setRowCount(len(rows))
-        for r, row in enumerate(rows):
-            values = [row.get("occurence", ""), row.get("filename", ""), row.get("chemin", ""), row.get("date", "")]
-            for c, value in enumerate(values):
-                item = QtWidgets.QTableWidgetItem(str(value))
-                if c == 0:
-                    # store absolute path for context actions
-                    item.setData(QtCore.Qt.UserRole, row.get("chemin", ""))
-                self.table.setItem(r, c, item)
-        self.table.setSortingEnabled(True)
-
-    def _resolve_row_path(self, row_index):
-        item = self.table.item(row_index, 0)
-        if item is None:
-            return ""
-        path = item.data(QtCore.Qt.UserRole) or ""
-        return str(path)
-
-    def show_context_menu(self, position):
-        index = self.table.indexAt(position)
-        if not index.isValid():
-            return
-
-        row = index.row()
-        menu = QtWidgets.QMenu(self)
-        show_in_explorer_action = menu.addAction("Afficher dans l'explorateur")
-        delete_action = menu.addAction("Supprimer le fichier")
-        google_action = menu.addAction("Recherche Google")
-        patreon_action = menu.addAction("Chercher sur Patreon")
-        selected = menu.exec_(self.table.viewport().mapToGlobal(position))
-
-        if selected == show_in_explorer_action:
-            path = self._resolve_row_path(row)
-            if path and os.path.exists(path):
-                directory = os.path.dirname(path) or path
-                if self.parent_app and hasattr(self.parent_app, "_open_in_file_manager"):
-                    self.parent_app._open_in_file_manager(directory)
-        elif selected == delete_action:
-            path = self._resolve_row_path(row)
-            if not path:
-                return
-            confirm = QtWidgets.QMessageBox.question(
-                self,
-                "Confirmer la suppression",
-                "Supprimer ce fichier .ts4script ?",
-                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                QtWidgets.QMessageBox.No,
-            )
-            if confirm != QtWidgets.QMessageBox.Yes:
-                return
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-                self.table.removeRow(row)
-            except OSError as exc:
-                QtWidgets.QMessageBox.warning(self, "Erreur lors de la suppression", str(exc))
-        elif selected == google_action:
-            # search using occurrence or filename without extension
-            base = ""
-            item = self.table.item(row, 0)  # occurence
-            if item and item.text().strip():
-                base = os.path.splitext(os.path.basename(item.text().strip()))[0]
-            if not base:
-                item2 = self.table.item(row, 1)  # filename
-                if item2 and item2.text().strip():
-                    base = os.path.splitext(item2.text().strip())[0]
-            if base:
-                QtGui.QDesktopServices.openUrl(QtCore.QUrl(f"https://www.google.com/search?q={quote_plus(base)}"))
-        elif selected == patreon_action:
-            base = ""
-            item = self.table.item(row, 0)
-            if item and item.text().strip():
-                base = os.path.splitext(os.path.basename(item.text().strip()))[0]
-            if not base:
-                item2 = self.table.item(row, 1)
-                if item2 and item2.text().strip():
-                    base = os.path.splitext(item2.text().strip())[0]
-            if base:
-                q = quote_plus(f"site:patreon.com {base}")
-                QtGui.QDesktopServices.openUrl(QtCore.QUrl(f"https://www.google.com/search?q={q}"))
-
-    def _show_header_menu(self, pos):
-        header = self.table.horizontalHeader()
-        global_pos = header.mapToGlobal(pos)
-        menu = QtWidgets.QMenu(self)
-        labels = ["occurence", "filename", "chemin", "date"]
-        for col, label in enumerate(labels):
-            action = QtWidgets.QAction(label, menu)
-            action.setCheckable(True)
-            action.setChecked(not self.table.isColumnHidden(col))
-            action.triggered.connect(lambda checked, c=col: self.table.setColumnHidden(c, not checked))
-            menu.addAction(action)
-        menu.exec_(global_pos)
-
 class GroupViewDialog(QtWidgets.QDialog):
     def __init__(self, parent, rows):
         super().__init__(parent)
@@ -7493,6 +7199,7 @@ class ModManagerApp(QtWidgets.QWidget):
         btn_dup = QtWidgets.QPushButton("Find dupplicates", self.tools_group); btn_dup.clicked.connect(self.open_duplicate_finder); tools_buttons.append(btn_dup)
         btn_conflict = QtWidgets.QPushButton("Conflict Checker", self.tools_group); btn_conflict.clicked.connect(self.open_conflict_checker); tools_buttons.append(btn_conflict)
         btn_idconf = QtWidgets.QPushButton("ID Conflict Viewer", self.tools_group); btn_idconf.clicked.connect(self.open_id_conflict_viewer); tools_buttons.append(btn_idconf)
+        btn_idconf_v2 = QtWidgets.QPushButton("ID Conflict V2", self.tools_group); btn_idconf_v2.clicked.connect(self.open_id_conflict_viewer_v2); tools_buttons.append(btn_idconf_v2)
         btn_nonmods = QtWidgets.QPushButton("Find non-mods files", self.tools_group); btn_nonmods.clicked.connect(partial(self._show_placeholder_message, "Find non-mods files", "La détection des fichiers non mods sera ajoutée ultérieurement.")); tools_buttons.append(btn_nonmods)
         btn_disable = QtWidgets.QPushButton("Disable all mods", self.tools_group); btn_disable.clicked.connect(partial(self._show_placeholder_message, "Disable all mods", "La désactivation des mods sera proposée dans une future mise à jour.")); tools_buttons.append(btn_disable)
         btn_cfg = QtWidgets.QPushButton("Correct resource.cfg", self.tools_group); btn_cfg.clicked.connect(self.correct_resource_cfg); tools_buttons.append(btn_cfg)
@@ -9175,7 +8882,7 @@ class ModManagerApp(QtWidgets.QWidget):
 
     def open_find_in_ts4script(self):
         start_dir = self.settings.get("mod_directory", "")
-        dlg = Ts4ScriptSearchDialog(self, start_dir)
+        dlg = Ts4ScriptSearchDialog(self, start_dir, datetime_formatter=format_datetime)
         dlg.exec_()
 
     def open_mod_comparator(self):
@@ -9352,6 +9059,29 @@ class ModManagerApp(QtWidgets.QWidget):
         except Exception:
             pass
         dialog = IDConflictViewerDialog(self, root)
+        dialog.exec_()
+
+    def open_id_conflict_viewer_v2(self):
+        root = self.settings.get("mod_directory", "")
+        if not root or not os.path.isdir(root):
+            QtWidgets.QMessageBox.warning(self, "Dossier des mods invalide", "Définis un dossier des mods valide dans la configuration.")
+            return
+        try:
+            self.logger.info("Open IDConflictViewerV2 for root=%s", root)
+        except Exception:
+            pass
+        id_index_cache = os.path.abspath(ID_INDEX_CACHE_PATH)
+        mod_scan_cache = os.path.abspath(MOD_SCAN_CACHE_PATH)
+        installed_mods_path = os.path.abspath(INSTALLED_MODS_PATH)
+        version_releases = dict(getattr(self, "version_releases", {}) or {})
+        dialog = IDConflictViewerDialogV2(
+            self,
+            root,
+            id_index_cache_path=id_index_cache,
+            mod_scan_cache_path=mod_scan_cache,
+            installed_mods_path=installed_mods_path,
+            version_releases=version_releases,
+        )
         dialog.exec_()
 
     def populate_table(self, data_rows):

@@ -34,6 +34,7 @@ Filtrage des résultats : L'agent permet à l'utilisateur de filtrer les résult
 Mise à jour des états des mods ignorés : L'agent permet à l'utilisateur de marquer les mods comme "ignorés" en utilisant des cases à cocher dans l'interface. Les choix sont persistés entre les sessions.
 
 Exportation des données : Les informations sur les mods sont exportées sous forme de tableau dans un fichier Excel, permettant un suivi facile des mods et de leurs états.
+- Analyse des conflits d'ID : via `modules/id_conflict_viewer`, l'agent fournit une vue hiérarchisée des doublons T/G/I avec codes couleurs, filtres avancés, désactivation en masse, suggestions d'ordre de chargement (`load_order_suggestion.json`) et contrôle de compatibilité.
 
 Agent de Configuration - Paramètres de l'Application
 Nom de l'Agent : SettingsManager

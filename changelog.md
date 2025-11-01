@@ -1,5 +1,25 @@
 Changelog
 
+v3.47.0 (2025-11-01)
+
+- ID Conflict Viewer
+  - Outil migré vers `modules/id_conflict_viewer.py` avec interface modernisée, coloration par sévérité, icônes dédiées et tri hiérarchisé des conflits critiques.
+  - Nouveaux filtres dynamiques (catégorie de ressource, niveau de sévérité, plages de dates, mots-clés dont WickedWhims/Basemental, présence de `.ts4script`) et surcouches statistiques.
+  - Boutons d’actions : désactivation en masse des mods conflictuels, génération d’un fichier `load_order_suggestion.json`, vérification de compatibilité (versions installées vs patchs récents) et export Excel enrichi.
+  - Journalisation alignée sur le logger principal (`Sims4ModTool`) et respect du paramétrage INFO/DEBUG.
+- Intégration
+  - Nouveau helper `open_id_conflict_viewer` dans `main.py` pour lancer la boîte de dialogue depuis l’interface ou les scripts externes.
+  - Mise à jour du numéro de version d’application et de la documentation utilisateur (README).
+
+v3.46.0 (2025-11-01)
+
+- Find in ts4script
+  - Dialogue extrait de `main.py` vers `modules/ts4script_search.py` pour clarifier l’architecture et faciliter la maintenance.
+  - Interface modernisée : groupe de paramètres, bouton d’accès direct au dossier Mods, remise à zéro rapide, panneau de détails et actions (copie, ouverture, suppression) accessibles depuis un menu contextuel.
+  - Boutons natifs réduire/maximiser/fermer rétablis sur la barre de titre et hauteur minimale ajustée pour un affichage confortable.
+- Journalisation
+  - Le module `ts4script_search` utilise désormais `logging.getLogger("Sims4ModTool.Ts4ScriptSearch")` et respecte le niveau configuré dans `main.py` (INFO/DEBUG).
+
 v3.45.0 (2025-10-31)
 
 - Log Manager

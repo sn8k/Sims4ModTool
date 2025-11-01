@@ -1,8 +1,8 @@
 ﻿# Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.45.0
-- **Dernière mise à jour :** 31/10/2025
+- **Version de l'application :** v3.47.0
+- **Dernière mise à jour :** 01/11/2025
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
@@ -34,13 +34,12 @@
 - Conflict Checker — détecte les résidus d’anciennes versions d’un même mod (ex.: foo_v1.2.ts4script et foo_v1.3.ts4script) et propose de supprimer les plus anciens après confirmation.
   - Evite les faux positifs entre `.package` et `.ts4script` (groupement par extension).
   - Lisibilité améliorée: nom du mod affiché sur chaque ligne enfant.
-- ID Conflict Viewer — nouvelle vue d’analyse des conflits d’ID (Type‑Group‑Instance) entre fichiers `.package`.
-  - Lecture expérimentale de l’index DBPF (v2) pour extraire les triples T/G/I.
-  - Affiche, pour chaque ressource en conflit, la liste des fichiers impliqués et leurs dates.
-  - Actions contextuelles: ouvrir le dossier, préfixer le fichier avec `zzz_` (réorganisation de l’ordre de chargement), désactiver le dossier du mod (déplacement dans `Backups/Disabled Mod`).
-  - Export des conflits au format Excel (`id_conflicts.xlsx`).
-  - Performances: « Utiliser cache fichiers » (utilise `mod_scan_cache.json`) et « Mode rapide (sans fallback) » pour accélérer l’analyse. Un cache persistant `id_index_cache.json` mémorise les TGI par fichier (clé: chemin+taille+mtime) et accélère fortement les analyses suivantes.
-  - Si le mode rapide ne renvoie aucun ID pour un fichier, l’analyse ré‑essaie automatiquement avec un fallback plus profond. Le parseur est multi‑threadé (jusqu’à 8 workers) pour accélérer les scans importants.
+- ID Conflict Viewer — vue experte des conflits d’ID (Type‑Group‑Instance) entre fichiers `.package`.
+  - Lecture DBPF robuste (fallback automatique) et cache persistant `id_index_cache.json`.
+  - Priorisation visuelle: couleurs + icônes par sévérité (critique → faible) et tri multi‑critères.
+  - Filtres avancés: catégorie de ressource, sévérité, plage de dates, mots‑clés (ex. *WickedWhims*), présence `.ts4script`.
+  - Actions contextuelles/globales: ouverture dossier, préfixe `zzz_`, désactivation en masse, export Excel enrichi.
+  - Suggestions automatiques: génération `load_order_suggestion.json` et contrôle de compatibilité (versions installées vs patchs récents).
 - Updates Checker — vérifie les mises à jour de l’intégralité des mods présents dans le dossier Mods (pas uniquement ceux installés via Mod Installer), en se basant par défaut sur la feuille publique « Mod List Checker » (Google Sheets CSV) de Scarlet's Realm.
   - Utilise `mod_scan_cache.json` (pas de rescan complet) pour inclure tous les mods.
   - Colonne « URL »: affiche le lien détecté lorsqu’une correspondance est trouvée.
@@ -150,8 +149,10 @@ Formats pris en charge
   - Contenu interne des `.ts4script` (noms, tailles, CRC)
   - Compteurs (packages, ts4scripts, entrées internes) et add-ons (depuis le marqueur si présent)
   - Utile pour identifier les changements entre une version patchée et non patchée d’un mod.
-- ID Conflict Viewer: détecte les ressources en doublon (T/G/I) à travers tous les `.package` du dossier Mods; permet d’exporter et de prendre des mesures rapides (préfixe `zzz_`, désactivation du dossier).
-  - Bouton Stop pour interrompre une analyse longue; la progression et l’état affichent clairement l’annulation.
+- ID Conflict Viewer: détecte et hiérarchise les ressources en doublon (T/G/I) à travers tous les `.package`, avec mise en forme par sévérité et filtres combinables (catégorie, date, mots‑clés, mods `.ts4script`).
+  - Bouton Stop pour interrompre une analyse longue; progression + statistiques détaillées.
+  - Actions rapides: ouvrir le dossier, préfixer `zzz_`, désactiver (déplacement `Backups/Disabled Mod`), export Excel complet.
+  - Suggestions: bouton « Réagencer automatiquement » → `load_order_suggestion.json`, et « Vérifier compatibilité » pour signaler les mods nécessitant une mise à jour.
 
 
 ## Paramétrage initial
@@ -267,7 +268,7 @@ Recent updates:
    - Top bar: Filters group (left) and Actions group (right) for quicker access to filters and actions.
 
 - Tools additions:
-  - Find in ts4script: recherche à l’intérieur des archives `.ts4script` (ZIP) d’un dossier. Entrez un ou plusieurs noms de fichiers (wildcards autorisés, séparés par espace/virgule/point‑virgule). Le résultat s’affiche dans un tableau sans filtres (fonctionnement « Show both ») avec les colonnes: « occurence » (entrée trouvée dans l’archive), « filename » (nom du `.ts4script`), « chemin » (chemin du fichier), « date » (date de modification). Inclut une barre d’avancement, un menu contextuel sur les lignes et un menu de colonnes sur l’en‑tête.
+  - Find in ts4script: recherche à l’intérieur des archives `.ts4script` (ZIP) d’un dossier. Entrez un ou plusieurs noms de fichiers (wildcards autorisés, séparés par espace/virgule/point‑virgule). L’outil dispose d’un panneau Paramètres modernisé (sélecteur du dossier Mods, nettoyage rapide des résultats, lancement via *Enter*), d’un tableau alterné avec panneau de détails, d’une copie rapide du chemin et d’un menu contextuel enrichi (Explorer, suppression, recherche Google/Patreon).
   - Check placement .ts4script: vérifie que les scripts `.ts4script` ne sont pas à plus d'un sous‑dossier de profondeur sous Mods; affiche une liste des contrevenants, ou un message "Tout va bien, tout le monde est à sa place 👍" si conforme.
   - Scan dossier (mod) : choisissez n'importe quel dossier à analyser (option « Récursif » cochée par défaut) et affichez les résultats dans un tableau.
   - L’outil consigne en debug les contrevenants et publie un résumé en niveau warning.
