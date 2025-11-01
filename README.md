@@ -1,8 +1,8 @@
 ﻿# Sims4ModTool
 
 ## Informations générales
-- **Version de l'application :** v3.40.1
-- **Dernière mise à jour :** 27/10/2025
+- **Version de l'application :** v3.45.0
+- **Dernière mise à jour :** 31/10/2025
 - **Description :** utilitaire PyQt5 pour analyser, organiser et maintenir vos mods Sims 4.
 
 ## Fonctionnalités principales
@@ -11,7 +11,12 @@
 - Marquage des mods ignorés (persisté dans `ignorelist.txt`) et filtres dynamiques configurables via plages de versions (sélection des patchs de départ et d'arrivée).
 - Affichage sélectif des mods contenant des fichiers `.package` et/ou `.ts4script` grâce aux cases à cocher cumulables **Show Package** et **Show TS4Script**.
 - Export des résultats au format Excel (`.xlsx`) avec conservation de toutes les colonnes visibles.
+- Scan non bloquant et plus rapide:
+  - L’analyse principale s’exécute désormais en arrière‑plan (QThread) — l’interface reste fluide et réactive pendant le scan.
+  - Lecture des métadonnées fichiers (stat) parallélisée via ThreadPoolExecutor, accélérant nettement les scans sur de gros dossiers.
+- Rendu depuis le cache: après un scan, l’interface lit et affiche les résultats à partir de `mod_scan_cache.json`. Un watcher (watchdog) surveille le fichier et met à jour l’affichage dès qu’il est modifié.
 - Nettoyage guidé du cache Sims 4 via le bouton **Clear Sims4 Cache**.
+  - Analyse/Rafraîchir ne vide plus le cache automatiquement; le cache n'est vidé qu'après une installation/modification effective (ou via le bouton dédié).
 - Sauvegarde et archivage horodaté des journaux (logs) vers le dossier de backups, avec ouverture automatique de l'emplacement et possibilité d'exclure certains fichiers par nom.
 - Lancement direct de `TS4_X64.exe` avec arguments optionnels. Un indicateur d’état affiche si le jeu est en cours d’exécution sur l’interface principale.
 - Archives .zip/.7z/.rar: extraction normalisée (temporaire) avec .ts4script qui définit la racine, puis copie vers Mods.
@@ -20,18 +25,33 @@
   - Un "Plan d’installation" s’affiche avant copie: possibilité d’ajuster le dossier destination, de choisir la racine (pour les archives MIXED) et de décider d’inclure les extras ; la saisie version/URL intervient après validation.
   - Tableau du Mod Installer: colonnes redimensionnables (mode interactif), colonne URL déplacée en dernière position, indicateur Add-ons sous forme de case à cocher (lecture seule).
 - Outils visibles directement sur la fenêtre principale dans un panneau "Tools" à droite du panneau "Actions".
-  - Nouveau: Log Manager — sélection d’un fichier log (`.log`, `.txt`, `.html`) avec affichage texte, filtre (mot-clé/regex, casse), recherche incrémentale et bouton d’analyse.
+  - Le bouton « Kill Sims 4 » est désormais déplacé en bas de la fenêtre (barre inférieure) pour éviter les clics accidentels et est aligné visuellement avec « Configuration » et « Launch Sims 4 ».
+  - Nouveau: Log Manager repensé — scan combiné des dossiers Mods/Cache (et dossiers personnalisés), filtrage par plage date/heure, analyse multi-fichiers avec diagnostic guidé, export Excel, et alerte temps réel dès qu’un nouveau log apparaît.
     - Analyse dédiée des rapports MCCC Last Exception (`mc_lastexception.html`) : extraction du type d’exception, message, chemins impliqués et détection heuristique du mod probable (dossier sous `Mods/`). Le titre de la fenêtre affiche la version du jeu détectée.
     - Bouton « Analyser dossier… » pour analyser récursivement un dossier de logs (ex.: `./logs`) et consolider les résultats (avec résumé détaillé).
-    - Bouton « Entrainer IA (ce log) » pour alimenter le modèle directement depuis le log (ou le dossier) analysé.
-  - Conflict Checker — détecte les résidus d’anciennes versions d’un même mod (ex.: foo_v1.2.ts4script et foo_v1.3.ts4script) et propose de supprimer les plus anciens après confirmation.
-  - Updates Checker — vérifie les mises à jour de l’intégralité des mods présents dans le dossier Mods (pas uniquement ceux installés via Mod Installer), en se basant par défaut sur la feuille publique « Mod List Checker » (Google Sheets CSV) de Scarlet's Realm.
+    - Entrainement IA: fenêtre dédiée avec options avancées pour entraîner un modèle (voir ci‑dessous).
+    - Barre de titre avec icônes Windows natives (réduire / maximiser / fermer) et association automatique des scripts `.ts4script` via l’IA lorsqu’un log ne fournit pas de fichier.
+- Conflict Checker — détecte les résidus d’anciennes versions d’un même mod (ex.: foo_v1.2.ts4script et foo_v1.3.ts4script) et propose de supprimer les plus anciens après confirmation.
+  - Evite les faux positifs entre `.package` et `.ts4script` (groupement par extension).
+  - Lisibilité améliorée: nom du mod affiché sur chaque ligne enfant.
+- ID Conflict Viewer — nouvelle vue d’analyse des conflits d’ID (Type‑Group‑Instance) entre fichiers `.package`.
+  - Lecture expérimentale de l’index DBPF (v2) pour extraire les triples T/G/I.
+  - Affiche, pour chaque ressource en conflit, la liste des fichiers impliqués et leurs dates.
+  - Actions contextuelles: ouvrir le dossier, préfixer le fichier avec `zzz_` (réorganisation de l’ordre de chargement), désactiver le dossier du mod (déplacement dans `Backups/Disabled Mod`).
+  - Export des conflits au format Excel (`id_conflicts.xlsx`).
+  - Performances: « Utiliser cache fichiers » (utilise `mod_scan_cache.json`) et « Mode rapide (sans fallback) » pour accélérer l’analyse. Un cache persistant `id_index_cache.json` mémorise les TGI par fichier (clé: chemin+taille+mtime) et accélère fortement les analyses suivantes.
+  - Si le mode rapide ne renvoie aucun ID pour un fichier, l’analyse ré‑essaie automatiquement avec un fallback plus profond. Le parseur est multi‑threadé (jusqu’à 8 workers) pour accélérer les scans importants.
+- Updates Checker — vérifie les mises à jour de l’intégralité des mods présents dans le dossier Mods (pas uniquement ceux installés via Mod Installer), en se basant par défaut sur la feuille publique « Mod List Checker » (Google Sheets CSV) de Scarlet's Realm.
+  - Utilise `mod_scan_cache.json` (pas de rescan complet) pour inclure tous les mods.
+  - Colonne « URL »: affiche le lien détecté lorsqu’une correspondance est trouvée.
+  - Bouton « Check Obsolete »: compare avec la feuille publique d’obsolescence et marque les mods obsolètes.
     - Source par défaut: `https://docs.google.com/spreadsheets/d/e/2PACX-1vRexBc8fcYyfsjbGRo3sH18jj9DuwKH8J7_SvQvpK_fvjsnILKRz1xGOwYz-xtG0wIKQcs1eDN1yw9V/pub?gid=119778444&single=true&range=A:I&output=csv`
     - Clé de configuration pour surcharger: `updates_checker_csv_url` dans `settings.json`.
     - Fallback automatique sur l’index TS4ModHound si la feuille CSV est indisponible.
     - Parsing de dates étendu (ex.: « Jul 2, 2025 ») pour une comparaison fiable « distant vs local ».
-- Fonction IA (expérimentale) — lorsqu’elle est activée dans la Configuration, l’application apprend des scans (noms, fichiers, chemins) pour mieux comprendre/associer les mods. Le Log Manager affiche une colonne « IA Mod (conf.) » suggérant le mod le plus probable.
-  - Entrainement A.I. — bouton dans Tools pour lancer manuellement l’apprentissage. L’entraînement ignore les filtres UI et construit un jeu de données non filtré depuis le dossier Mods, puis apprend aussi depuis les logs (.log/.txt/.html + extensions configurées). Une fenêtre dédiée affiche l’état en temps réel (progression) et un résumé final (comptes, top tokens/mods). Le modèle est sauvegardé à la fin.
+- Fonction IA (expérimentale) — lorsqu’elle est activée dans la Configuration, l’application apprend des scans (noms, fichiers, chemins) et désormais les journaux (`.log`, `.html`, `.txt`). Le Log Manager affiche une colonne « IA Mod (conf.) » priorisant le classifieur TF‑IDF et propose des pistes de résolution.
+  - Entrainement A.I. — bouton dans Tools pour lancer manuellement l’apprentissage. L’entraînement ignore les filtres UI et construit un jeu de données non filtré depuis le dossier Mods, apprend depuis les logs (.log/.txt/.html + extensions configurées) et inclut l’index CSV de l’Updates Checker (liste publique). Une fenêtre dédiée affiche l’état en temps réel (progression) et un résumé final (comptes, top tokens/mods). Les paramètres sont persistés (sources, moteur, split, n‑grammes, max features, lot, min échantillons/classe, stratégie rare, équilibrage, k-folds). Deux moteurs sont disponibles: LinearSVC (TF‑IDF) avec `class_weight='balanced'` optionnel et un réseau neuronal léger (TF‑IDF + SVD + MLPClassifier). Les classes rares peuvent être supprimées ou fusionnées avant entraînement, et une validation croisée stratifiée peut être activée. Un bouton « Vérifier modèle » contrôle l’intégrité du fichier IA (JSON + .joblib) et log l’état.
+  - Barre inférieure: l’étiquette IA affiche désormais l’état courant du modèle (moteur, date d’entraînement, volumes) et indique clairement si un nouvel entraînement est recommandé.
 - Filtre additionnel: "Masquer Mod Installer" pour cacher les mods installés via l’Installer.
   - Nouvelle colonne "Installer" (✓) pour distinguer visuellement les mods installés via le Mod Installer.
 - Actions de l'interface dotées d'icônes (Rafraîchir, Exporter, Nettoyer cache, Récupérer logs, Mod Installer, Outils, Group View, Kill, Configuration, Lancer le jeu).
@@ -44,14 +64,19 @@
   - Protected : possibilité de marquer un mod comme Protected (tableau principal et Mod Installer). Les mods Protected s'affichent en texte noir sur fond rose et requièrent une confirmation avant mise à jour.
 
 ## Nouveautés v3.40
-- Log Manager: analyse spéciale MCCC, filtre/recherche, et intégration IA optionnelle.
+- Log Manager: analyse MCCC/Last Exception consolidée, diagnostic par gravité avec actions recommandées, filtres par plage temporelle et intégration IA optionnelle.
 - IA: apprentissage léger des mods (activable dans Configuration) + entraînement automatique lors des scans.
 - Correctif: le scan de démarrage est différé pour laisser l’arrière‑plan de la fenêtre s’afficher avant l’analyse.
 - Entrainement A.I.: popup d’information à l’ouverture, fenêtre dédiée avec progression en temps réel, logs détaillés et sauvegarde du modèle.
 - UI: la barre du bas affiche "AI Mode Activated" lorsque l’IA est activée et chargée.
 - L’entraînement IA ignore les filtres d’affichage: il construit son propre jeu de données (mods + logs) depuis le disque.
-- Log Manager: ajoute un Résumé détaillé (top exceptions, top mods via IA, top fichiers) après chaque analyse.
+- Log Manager: résumé détaillé (gravités, mods suspects, actions critiques) et export direct en `.xlsx` après chaque analyse.
 
+## A.I. — Rôle et garanties
+- Prévenir réinstallation/suppression: lors d’une (ré)installation, si un marqueur existe dans la cible ou si une copie désactivée est détectée, un avertissement propose de « remplacer (clean) » ou « fusionner » (ou annuler).
+- Groupes 100% fiables: les groupes utilisés par "Group View" sont déterminés de façon déterministe si tous les fichiers pointent vers le même premier dossier sous Mods; les mods installés via l’Installateur sont reconnus via leurs marqueurs.
+- Aide au dépannage: l’IA agrège les logs, suggère le mod probable, et améliore progressivement ses associations (tokens). Aucun forçage de groupe en cas d’ambiguïté.
+- Extensible: les règles déterministes (marqueurs, scripts, chemins) priment; les heuristiques d’appoint restent optionnelles et sans effet destructif.
 ## Prérequis
 - Python 3.9 ou supérieur.
 - Dépendances Python :
@@ -125,6 +150,8 @@ Formats pris en charge
   - Contenu interne des `.ts4script` (noms, tailles, CRC)
   - Compteurs (packages, ts4scripts, entrées internes) et add-ons (depuis le marqueur si présent)
   - Utile pour identifier les changements entre une version patchée et non patchée d’un mod.
+- ID Conflict Viewer: détecte les ressources en doublon (T/G/I) à travers tous les `.package` du dossier Mods; permet d’exporter et de prendre des mesures rapides (préfixe `zzz_`, désactivation du dossier).
+  - Bouton Stop pour interrompre une analyse longue; la progression et l’état affichent clairement l’annulation.
 
 
 ## Paramétrage initial
@@ -136,6 +163,11 @@ Ouvrez la fenêtre **Configuration** pour définir :
 - Les extensions supplémentaires de journaux à inclure lors de l'extraction (en plus de `.log` et `.txt`).
 - Les fichiers de logs à ignorer lors de la collecte.
 - Les versions de patch disponibles pour le filtrage (affichage de la liste et ajout via le bouton **Add update info**).
+
+AI (facultatif) — dans Configuration > Intelligence Artificielle
+- Activer l’IA (expérimental) pour afficher la colonne IA et permettre les suggestions.
+- Auto‑train au démarrage pour que le modèle soit mis à jour automatiquement.
+- Chemin du fichier modèle (JSON). Si un classifieur TF‑IDF a été entraîné, il est automatiquement préféré pour la prédiction; sinon, le moteur basique par tokens est utilisé.
 
 Les paramètres sont enregistrés dans `settings.json` dès la sauvegarde de la fenêtre.
 
@@ -149,6 +181,10 @@ La table principale affiche une ligne par mod détecté avec les colonnes suivan
 
 Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de supprimer ou de lancer une recherche Google/Patreon sur le mod sélectionné.
 
+Regroupement:
+- Si le mod a été installé via Mod Installer, le groupe affiché correspond au nom du mod de l’installateur.
+- Sinon, pour éviter les dossiers « fourre‑tout » qui regroupent plusieurs mods différents, le groupement se fait par nom de fichier (base normalisée) plutôt que par dossier parent.
+
 ## Boutons de l'interface\n- Informations jeu : affichage Version/Build en bas au centre (issu de config.log si présent).
 - **Analyser / Rafraîchir** : relance le scan du dossier de mods configuré.
 - **Exporter vers Excel** : crée ou met à jour le fichier `.xlsx` choisi.
@@ -157,6 +193,8 @@ Un clic droit sur une ligne permet d'ignorer, d'ouvrir dans l'explorateur, de su
 - **Launch Sims 4** : exécute `TS4_X64.exe` avec les arguments configurés (bouton désactivé si le chemin est invalide).
 - **Kill Sims 4** : termine le processus `TS4_x64.exe` en cours d'exécution.
 - **Mod Installer** : ouvre une fenêtre listant les mods installés via l'outil, accepte le glisser-déposer de fichiers `.package`, `.ts4script` ou `.zip`, gère la mise à jour ou l'ajout d'add-ons pour un mod existant et range automatiquement les fichiers dans des sous-dossiers dédiés du dossier de mods.
+  - Clic droit: « Search for Update » ouvre Updates Checker pré-filtré et lance une recherche.
+  - Clic droit: « Repair definition… » re-scanne le dossier choisi et recrée un `.s4mt_mod_marker.json` propre.
 
 Astuce: clic droit sur l'en-tête de la table du Mod Installer pour choisir quelles colonnes afficher/masquer (préférences mémorisées).
 Au bas de la fenêtre, la version et le build du jeu (si disponibles) sont affichés, lus depuis `config.log` dans le dossier de caches.
@@ -181,9 +219,15 @@ Le fichier Excel généré contient l'intégralité des colonnes visibles, y com
 - Vérifiez que les chemins configurés existent réellement et que vous disposez des droits nécessaires.
 - En cas de lancement du jeu impossible, assurez-vous que `TS4_X64.exe` est présent et que les arguments saisis sont valides.
 - Pour réinitialiser les préférences, supprimez `settings.json` et `ignorelist.txt` (ils seront recréés au prochain lancement).
+- Si l’affichage ne se met pas à jour immédiatement après un scan, vérifiez les logs pour « Writing cache » / « Cache written ». La mise à jour de la table est déclenchée par la modification de `mod_scan_cache.json` (watchdog).
 
 ## Licence
 Ce projet est fourni tel quel pour un usage personnel. Adaptez-le selon vos besoins.
+
+## Tests
+- Prérequis: `pip install -r requirements.txt` puis `pip install pytest`.
+- Exécuter les tests ciblés Analyser/Rafraîchir: `python -m pytest -q tests/test_analyser_refresh.py`.
+- Le test crée un dossier Mods temporaire avec des fichiers factices, lance le scan en arrière‑plan et vérifie que la table GUI est remplie et que le moteur de scan retourne les bonnes lignes.
 # Sims 4 Mod Manager (Sims4ModTool)
 
 Recent updates:
@@ -196,6 +240,8 @@ Recent updates:
 
 - GUI
   - New Group View dialog (tree) to collapse/expand rows by mod group.
+  - Group View readability: lignes alternées aux couleurs sombres, surlignage clair des sélections et confiance à 100 % pour les entrées provenant du Mod Installer.
+  - Bouton « Reconstruire Groupes (AI) » s’appuie maintenant sur les fichiers `.package` / `.ts4script` (détection des paires, préfixes entre crochets et scripts isolés) pour générer des overrides persistants.
   - Table highlights rows installed via Mod Installer (green background, white text).
   - Search: "Afficher recherche" et "Instant search" en ligne 1; étiquette, zone de saisie et bouton "Rechercher" en ligne 2.
   - File filter dropdown: Show both / Show Package / Show TS4Script / Mod Installer Only.
@@ -203,7 +249,17 @@ Recent updates:
    - Startup splash screen now features a gradient background and a plumbob-like diamond.
    - Configuration dialog reorganized and enlarged for easier navigation.
    - Added icons to action buttons.
+  - AI Training
+    - Sources toggles: include/exclude scanned Mods, Logs, and the online Updates Checker index.
+    - Training engines: Basic (bag‑of‑tokens) or TF‑IDF Classifier (LinearSVC; optional, requires scikit‑learn).
+    - ML options: validation split, TF‑IDF max features, n‑gram range (1‑1/1‑2/1‑3).
+    - Results panel: clearer summary with counts, vocabulary size, top tokens/mods, and classifier metrics (accuracy, F1) when applicable.
+    - The “Annuler” button switches to “Terminer” after training completes.
+   - Apparence: curseur « Opacité des cadres » (Configuration > Apparence) pour régler la transparence des panneaux et laisser apparaître le fond d’écran. La préférence est sauvegardée (clé `ui_frame_opacity`).
+   - Fond principal personnalisé: l’image définie via `background_image_path` est appliquée dès le démarrage (recalage automatique après l’ouverture), même avant toute interaction.
+   - Palette boutons/ToolButtons: thèmes sombres restaurés (hover/pressed/désactivé) pour éviter le texte blanc sur fond blanc.
    - Action buttons normalized and arranged in an adaptive grid; bottom buttons are smaller; bottom center shows Version/Build (from caches).
+   - Splash personnalisé: définir `splash_background_image_path` dans `settings.json` (ou via Configuration) pour afficher une image de fond au démarrage; le texte est lisible grâce à un léger dégradé semi‑transparent et une ombre.
   - Toutes les opérations sensibles (scan, installation, suppression, export) sont bloquées lorsque TS4_x64.exe est en cours d’exécution (message d’attente affiché). Indicateur d’état en bas de fenêtre.
   - Kill Sims 4 attempts elevation on Windows when required (UAC prompt), with clear status.
   - Tools: “Correct resource.cfg” checks and fixes Mods\Resource.cfg to recommended defaults.
@@ -223,7 +279,12 @@ Recent updates:
 - Duplicate Finder
   - Recursively scans subfolders; supports advanced mode by filename + size.
   - Progress bar and multi‑select delete.
-  - Fix: crash at launch due to missing `_run_scan` in dialog.
+  - Fixes
+    - Durable: `_run_scan` and helpers are defined on `DuplicateFinderDialog` (prevents crash on open due to missing method).
+    - Context menu (tableau principal): l’action « Chercher sur Patreon » est ajoutée explicitement, supprimant l’avertissement Pylance et rendant l’option opérationnelle.
+
+- Updates Checker
+  - Bouton « Open » reconfiguré uniquement avec des URL HTTP/HTTPS valides (prévention de l’erreur `QUrl(bool)`).
 ## Internationalisation
 - Fichiers de langue prêts sous `lang/` : `fr-fr.lng` et `en-us.lng`. Format JSON clé/valeur pour les titres, actions, filtres, outils et apparence.
 - Sélection de la langue (fr-FR / en-US) dans **Configuration**.
@@ -256,6 +317,8 @@ Notes:
 - If `version_release.json` exists, it is bundled via `--add-data`.
 - Output is written to the `dist` folder.
 - To avoid multiple Qt bindings conflicts, the build scripts exclude `PySide6`, `PySide2` and `PyQt6` because the app targets `PyQt5`.
+
+
 
 
 

@@ -1,5 +1,133 @@
 Changelog
 
+v3.45.0 (2025-10-31)
+
+- Log Manager
+  - Outil entièrement extrait dans `modules/log_manager.py` : architecture dédiée pour l’analyse et la surveillance des journaux.
+  - Nouvelle interface: sélection simultanée des dossiers Mods/Cache (plus dossiers personnalisés), filtrage par plage date/heure, liste multi-sélection et aperçu combiné.
+  - Résultats enrichis avec gravité, mods suspects, suggestions d’actions et export direct en `.xlsx`.
+  - Barre de titre modernisée : icônes Windows (réduire/maximiser/fermer) natives et suppression du bouton « Déduire les regroupements (IA) » (toujours accessible via Group View).
+  - Journalisation dédiée alignée sur le niveau global (INFO ↔ DEBUG) pour suivre scans, analyses et alertes temps réel.
+  - Recherche de scripts `.ts4script` assistée par l’IA : lorsqu’un mod est cité sans fichier, les prédictions TF-IDF complètent automatiquement les chemins manquants.
+- Logs IA & diagnostics
+  - L’IA apprend désormais des journaux `.log/.html/.txt`, privilégie le classifieur TF-IDF et propose des recommandations contextualisées.
+  - Auto-train optionnel depuis les analyses de logs et mise à jour des overrides IA côté Mod Manager.
+- Surveillance temps réel
+  - Ajout d’un watcher (watchdog) qui alerte l’utilisateur dès qu’un nouveau log est généré pendant la session de jeu.
+
+v3.44.2 (2025-10-31)
+
+- UI
+  - Correctif de démarrage: le fond personnalisé (`background_image_path`) est réappliqué via un timer `singleShot` dès l’ouverture de la fenêtre, sans devoir repasser par la configuration.
+  - Palette sombre restaurée pour les boutons (QPushButton/QToolButton) afin de résoudre l’affichage « texte blanc sur fond blanc » introduit précédemment.
+
+v3.44.1 (2025-10-31)
+
+- UI
+  - Le fond d’écran personnalisé configuré via `background_image_path` est appliqué dès le lancement (palette dédiée + fallback sombre lorsque l’image est absente).
+  - Group View adopte un thème sombre cohérent (alternance foncée, surlignage lisible) et force la confiance à **100 %** sur les mods installés via Mod Installer.
+- Groupes (AI)
+  - « Reconstruire Groupes (AI) » n’exploite plus les logs mais inspecte directement les fichiers `.package` / `.ts4script` : détection des paires `foo.package` + `foo.ts4script`, regroupement par préfixes entre crochets (`[NF]_foo`) et scripts isolés comme groupes autonomes.
+  - Les overrides générés sont persistés dans `settings.json` (clé `ai_group_overrides`) et déclenchent un rafraîchissement immédiat de la table principale.
+
+v3.42.0 (2025-10-30)
+
+- Entrainement IA
+  - Nouvelle interface avec options avancées: sélection des sources (Mods, Logs, Index Updates Checker), moteur d’entrainement (Basique vs TF‑IDF/LinearSVC) et paramètres ML (split de validation, max features, n‑grammes).
+  - Calcul de métriques lorsque le classifieur est activé (accuracy, F1 macro) et affichage d’un résumé clair (compteurs, vocabulaire, top tokens, top mods).
+  - Le bouton « Annuler » devient « Terminer » en fin d’entrainement.
+  - Export du résumé vers un fichier texte.
+- Prédiction IA
+  - La prédiction préfère désormais automatiquement le modèle TF‑IDF entraîné (si présent), avec repli sur le vote par tokens.
+- Groupes (non‑Installer)
+  - Quand aucun marqueur Mod Installer n’est présent, les lignes sont désormais regroupées par nom de fichier (base normalisée) plutôt que par dossier de tête, afin d’éviter que des dossiers hétérogènes ne fusionnent plusieurs mods distincts.
+- Configuration
+  - Section « Intelligence Artificielle »: activer/désactiver l’IA, auto‑train au démarrage et choisir le chemin du modèle JSON.
+- Dépendances
+  - Ajout (optionnel): `scikit-learn` et `joblib` pour le classifieur TF‑IDF (la voie Basique reste disponible sans dépendances supplémentaires).
+
+v3.41.3 (2025-10-30)
+
+- Tests
+  - Ajout de tests automatisés pour la fonction « Analyser / Rafraîchir »:
+    - `tests/test_analyser_refresh.py` vérifie que le moteur de scan retourne des lignes attendues sur un dossier Mods factice et que la GUI remplit la table après un scan en arrière‑plan.
+  - Script de debug `scripts/dev_debug_refresh.py` pour reproduire rapidement un scan en mode headless.
+- Docs
+  - README: section « Tests » ajoutée avec les commandes pour exécuter les tests PyTest.
+ - Logs & Perf
+   - `scan_directory`: logs de début/fin avec nombre d’éléments et durée.
+   - `generate_data_rows`: logs de début couplage (packages/scripts), résumé d’appariement (matches restants), et fin (lignes générées, durée, état du snapshot).
+   - `save_mod_scan_cache`: log « Writing cache… » + « Cache written… » avec taille/temps; notification UI « Écriture du cache… » pendant l’opération.
+   - Au démarrage: log de la date/heure de dernière modification de `mod_scan_cache.json`, sa taille et le nombre d’entrées si présent.
+
+v3.41.2 (2025-10-30)
+
+- GUI
+  - Correction: les résultats du scan s’affichent de nouveau correctement, même si la recherche instantanée est désactivée (rendu forcé après scan).
+  - Quand l’option « Scan au démarrage » est désactivée, la liste des mods est automatiquement remplie à partir de mod_scan_cache.json pour garantir un affichage immédiat.
+  - Le bouton « Kill Sims 4 » est déplacé en bas de la fenêtre.
+  - Le bouton « Kill Sims 4 » est redimensionné pour correspondre à « Configuration » et « Launch Sims 4 ».
+  - Tous les dialogues/fenêtres (hors boîtes d’alerte) sont désormais redimensionnables (grip + maximisation activés).
+- Cache Sims 4
+  - Le bouton « Analyser / Rafraîchir » n’exécute plus de « clear sims4 cache ».
+  - Le cache n’est vidé automatiquement qu’après une modification effective (ex: installation via Mod Installer), conformément à la règle générale.
+- AI
+  - L’entraînement IA inclut désormais l’index CSV de l’Updates Checker (liste publique), améliorant la couverture des mods connus.
+- Log Manager / Group View
+  - Le bouton « Reconstruire Groupes (AI) » est déplacé dans la vue Group View, pour centraliser les actions de regroupement.
+ - Tools (modules)
+   - Nouveau dossier `modules`: tous les outils externes placés ici sont détectés automatiquement et ajoutés au panneau Tools (format simple: `get_tools(app)` ou `register_tools(app)`).
+ - Log Manager
+   - Bouton « Entrainer IA (ce log) » supprimé.
+ - Mod Installer
+   - Correction: l’installation d’archives 7z/rar fonctionne de nouveau (bug d’import des helpers corrigé).
+v3.41.0 (2025-10-29)
+
+- Scan & UI
+  - Le scan principal s’exécute désormais en arrière‑plan via QThread: l’UI ne se fige plus pendant l’analyse. La barre d’avancement et le compteur sont mis à jour en direct.
+  - Accélération des scans: collecte des métadonnées fichiers (os.stat) parallélisée avec ThreadPoolExecutor. Gain notable sur les grands dossiers Mods.
+  - Résultats et filtres inchangés; uniquement des améliorations de performance et de réactivité.
+
+v3.40.4 (2025-10-29)
+
+- Conflict Checker
+  - Evite les faux positifs entre `.package` et `.ts4script` en groupant par extension. Les anciennes versions sont proposées à la suppression par groupe homogène.
+  - Lisibilité: affichage du nom du mod pour chaque ligne enfant; suppression des lignes « vides ».
+
+- Updates Checker
+  - Ne lance plus de scan complet: s’appuie sur `mod_scan_cache.json` pour lister tous les mods (plus de limite à ~208 éléments).
+  - Ajout d’une colonne « URL » affichant le lien de téléchargement quand il est détecté dans l’index.
+  - Nouveau bouton « Check Obsolete »: compare avec la feuille publique d’obsolescence et marque les mods obsolètes dans la colonne Status.
+
+- Mod Installer
+  - Nouveau dans le menu contextuel: « Search for Update » ouvre l’Updates Checker filtré sur le mod et déclenche la recherche.
+  - Nouveau: « Repair definition… » permet de re-vérifier un dossier sélectionné et de recréer un fichier `.s4mt_mod_marker.json` propre.
+
+v3.40.3 (2025-10-29)
+
+- GUI
+  - Rétabli: curseur « Opacité des cadres » dans Configuration > Apparence. La valeur est persistée dans `settings.json` (clé `ui_frame_opacity`) et s’applique à l’interface pour laisser apparaître le fond d’écran.
+  - Menus contextuels: correction d’un crash `UnboundLocalError` (variable `current_atf`) lors de l’ouverture du menu sur des lignes sans groupe. L’état par défaut est correctement initialisé.
+
+- Updates Checker
+  - Bouton « Open »: robuste face aux URL non textuelles. Le clic ne reconfigure le bouton que pour des URL HTTP/HTTPS valides; évite l’exception `QUrl(bool)`.
+
+- Context Menus
+  - Ajout explicite de l’action « Chercher sur Patreon » dans le menu contextuel principal là où elle manquait, supprimant l’avertissement Pylance « reportUndefinedVariable » et rétablissant l’action.
+
+- Splash Screen
+  - Le fond personnalisé du splash est désormais affiché (clé `splash_background_image_path`). Correction de l’ordre de dessin et d’un dégradé opaque qui masquait l’image.
+  - Lisibilité améliorée: zone de titre plus haute, alignement en haut, légère ombre portée, et dégradé semi‑transparent pour conserver le contraste sans cacher l’image.
+
+v3.40.2 (2025-10-28)
+
+- Duplicate Finder
+  - Durable fix: `_run_scan` and related helpers are now defined on `DuplicateFinderDialog` (not another class). Prevents the recurrent `AttributeError: 'DuplicateFinderDialog' object has no attribute '_run_scan'` when opening the tool.
+
+- Context Menus
+  - Fixed undefined variable error: `patreon_action` is now added to the main table context menu before being used (resolves Pylance reportUndefinedVariable at main.py:7090).
+  - Cleanup: removed a duplicated `patreon_action = menu.addAction("Chercher sur Patreon")` entry in an older context menu.
+
 v3.40.1 (2025-10-27)
 
 - Export
@@ -240,3 +368,51 @@ v3.31 (2025-10-22)
 - Splashscreen
   - Le fond d’écran personnalisable est désormais visible: lorsque défini, le dégradé est rendu semi‑transparent au lieu de recouvrir totalement l’image.
   - Titre toujours visible à l’intérieur du splash (zone de texte recalibrée) et rendu au‑dessus des effets visuels.
+
+- A.I.
+  - Ajout d’un groupage déterministe: si tous les fichiers pointent vers le même premier dossier sous Mods, ce dossier est utilisé comme groupe (prioritaire quand aucun marqueur n’existe).
+  - Prévention de réinstallation: si un marqueur est présent dans la cible ou si une copie désactivée correspondante est détectée, l’Installateur avertit et propose Remplacer (clean) ou Fusionner, ou Annuler.
+
+v3.41.0 (2025-10-29)
+
+- Tools
+  - Added ID Conflict Viewer: scans all `.package` files for resource ID (Type/Group/Instance) conflicts and displays them in a tree view.
+  - Context actions: open folder, prefix file with `zzz_`, disable mod folder (moves to `Backups/Disabled Mod`).
+  - Excel export of conflicts as `id_conflicts.xlsx`.
+  - Added a Stop button to cancel long-running scans with clear UI feedback and logging.
+- Performance
+  - ID Conflict Viewer now supports using `mod_scan_cache.json` to list files and a fast mode that skips tail fallback parsing.
+  - Added persistent per-file TGI cache (`id_index_cache.json`) keyed by path+size+mtime to speed up subsequent runs.
+  - Parallel parsing via ThreadPoolExecutor (up to 8 workers) with batched cache writes and responsive progress updates.
+- Logging
+  - Logs ID conflict scans, renames and disable actions to `sims4modtool.log` at INFO/DEBUG level.
+v3.41.3 (2025-10-30)
+
+- Tools (modules)
+  - Déplacé: « Entrainement A.I. » dans `modules/ai_training.py`. Les outils externes du dossier `modules` sont chargés automatiquement.
+- Entrainement A.I.
+  - Correction: ajout d’un champ « Dossier à analyser » dans la fenêtre (l’erreur `AttributeError: 'AITrainingDialog' object has no attribute 'path_edit'` est corrigée).
+  - L’entraînement utilise le dossier choisi (par défaut le dossier Mods), les logs et l’index CSV public.
+v3.44.0 (2025-10-31)
+
+- Interface IA
+  - L’étiquette de statut affiche le moteur courant, la date d’entraînement et le volume appris; elle signale explicitement lorsqu’un nouvel entraînement est requis (modèle manquant, fichier .joblib absent, etc.).
+  - Bouton « Vérifier modèle » dans la fenêtre Entrainement A.I. : contrôle la cohérence du JSON et des modèles enregistrés (TF‑IDF / MLP), met à jour le statut et log les anomalies.
+- Entrainement A.I.
+  - Correction d’un crash (`ml_selected` non défini) apparu lors de l’introduction des nouveaux moteurs.
+  - Métadonnées enrichies (engine, métriques, flags) pour déterminer si un ré-entraînement est nécessaire.
+
+v3.43.0 (2025-10-30)
+
+- AI Training
+  - Nouvelle gestion des classes rares: seuil configurable (min échantillons/classe), avec suppression des classes trop faibles ou fusion dans une classe « Rare ».
+  - Option d’équilibrage `class_weight='balanced'` pour LinearSVC et support de la validation croisée stratifiée (k-folds) lorsque les classes le permettent.
+  - Nouveau moteur « Réseau neuronal léger (MLP) » basé sur scikit-learn (vectorisation TF‑IDF + SVD + MLPClassifier), optimisé pour rester léger.
+  - Paramètres persistés entre les sessions (sources, moteur, split, n‑grammes, max features, batch, seuil, stratégie rare, équilibrage, k-folds).
+
+v3.42.1 (2025-10-30)
+
+- AI Training
+  - La progression inclut désormais l’étape TF‑IDF (barre non bloquée à 100% alors que le classifieur s’entraîne).
+  - Appel périodique de `processEvents()` pour rafraîchir l’UI autour des étapes lourdes.
+  - Persistance des paramètres d’entraînement (sources, moteur, split, n‑grammes, max features, batch) dans `settings.json`.

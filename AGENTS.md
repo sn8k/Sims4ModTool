@@ -11,6 +11,8 @@ Mettre à jour et afficher les informations liées aux fichiers .package et .ts4
 
 Offrir une interface graphique intuitive pour l'utilisateur, avec la possibilité de naviguer dans le répertoire de mods et filtrer les résultats selon différents critères.
 
+Entrainement IA (outil avancé): une fenêtre dédiée permet d’entrainer un modèle de suggestion de mod à partir des fichiers scannés, des journaux et d’un index public. Deux moteurs sont disponibles: un modèle basique à base de tokens (léger) et un classifieur TF‑IDF (LinearSVC, optionnel). Les résultats incluent des métriques et un résumé exportable.
+
 Compétences et Capacités :
 
 Explorer des répertoires de fichiers pour trouver tous les fichiers .package et .ts4script associés.
@@ -73,6 +75,30 @@ Application des filtres : L'agent applique les filtres spécifiés par l'utilisa
 
 Gestion des résultats filtrés : Après l'application des filtres, les résultats sont mis à jour en temps réel dans la table de l'interface.
 
+Agent Spécialisé - Log Manager
+Nom de l'Agent : LogManager
+Rôle :
+
+Surveiller et analyser les journaux Sims 4 (`.log`, `.html`, `.txt`) en provenance des dossiers Mods, Cache et dossiers personnalisés définis par l'utilisateur. Fournir un diagnostic exploitable (gravité, mods suspects, actions recommandées) et alerter l'utilisateur s'il apparaît de nouveaux logs pendant la partie.
+
+Compétences et Capacités :
+
+Scan unifié des répertoires de logs avec filtres par date et heure, classement multi-fichiers et prévisualisation instantanée.
+
+Analyse sémantique des entrées (exceptions, warnings, Script Call Failed) avec génération automatique d'un résumé priorisé et export Excel.
+
+Intégration IA : apprentissage continu depuis les logs analysés, priorisation du classifieur TF-IDF, suggestions de mods probables et mise à jour des overrides IA.
+
+Surveillance temps réel via watchdog : émet une notification dès qu'un nouveau log apparaît, tout en ajoutant l'entrée dans la liste analysable.
+
+Actions :
+
+Analyse ciblée : sélection de plages temporelles ou de lots de fichiers pour générer un rapport complet et proposer des actions correctives.
+
+Enrichissement IA : entraînement automatique des modèles lorsque l'option est active et reconstruction des regroupements IA à partir des résultats de logs.
+
+Exportation et partage : sauvegarde des analyses au format `.xlsx` pour archivage ou communication avec d'autres outils de support.
+
 Rôle d'Intégration des Agents
 
 Tous les agents doivent collaborer pour garantir une interaction fluide. Voici les interactions principales entre eux :
@@ -82,6 +108,8 @@ ModManager se charge de la gestion des fichiers et de l'affichage.
 SettingsManager assure la gestion des préférences utilisateurs pour maintenir la persistance de l'état des paramètres.
 
 FilterManager gère les filtres d'affichage, que l'agent ModManager utilise pour rafraîchir la vue de l'utilisateur.
+
+Pour l’IA: SettingsManager gère aussi `ai_enabled`, `ai_auto_train` et `ai_model_path` (activable/désactivable depuis la fenêtre Configuration). Lorsque `ai_enabled` est actif, ModManager charge le modèle et l’interface affiche une colonne IA; la prédiction privilégie le classifieur TF‑IDF s’il est disponible.
 
 Problèmes possibles à gérer :
 
@@ -96,3 +124,9 @@ Ce fichier agents.md définit les différents agents qui interagissent dans le g
 
 IMPERATIF : 
 - les fichiers README.md et CHANGELOG.md doivent toujours être à jour.
+- les numeros de versions doivent etre à jour dans le code.
+- requirements.txt doit etre maintenu a jour
+- les scripts build doivent etre constamment a jour.
+- en cas de changement majeur, mettre a jour AGENTS.md
+- TOUS LES MODULES ET TOUTES LES FONCTIONS DOIVENT AVOIR UN LOGLEVEL ALLANT DE INFO A DEBUG ET SUIVRE LE PARAMETRAGE DE MAIN.PY.
+- Toutes les fenetres doivent avoir les boutons natifs "minimize"/"maximize"/"close" dans la barre de titre.
